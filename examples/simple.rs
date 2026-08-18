@@ -1,11 +1,12 @@
+use chill_ffi::setupZygote;
 use chill_ffi::worker::callExternal;
 use chill_ffi::types::{FFIValue, FFIType};
-use chill_ffi::zygote::initZygote;
+// =================================================================================================
 
-fn main()
+fn main() -> ()
 {
-  // Инициализируем зиготу (обязательно первой строкой)
-  initZygote().expect("Failed to init zygote");
+  // Если запущен как зигота, переключаемся в режим обработки запросов
+  setupZygote().expect("Failed to setup zygote");
 
   // Тест 1: Вызов sqrt(4.0) из libm.so
   let args = vec![FFIValue::F64(4.0)];
@@ -47,3 +48,5 @@ fn main()
 
   println!("All tests passed!");
 }
+
+// =================================================================================================

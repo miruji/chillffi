@@ -22,7 +22,11 @@ libc = { version = "1.0.0-alpha.3" }
 # перенаправления stdout → stderr, изолируя вывод библиотеки от служебного канала.
 
 serde = { version = "1.0.228", features = ["derive"] }
-# todo desc
+# todo desc (Вроде как просто сериализация)
+
+ctor = "1.0.13"
+# todo desc (Вроде как просто для тестов и других - чтобы видели зиготу setup)
+
 
 [lints.rust]
 non_snake_case = "allow"
