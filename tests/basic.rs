@@ -1,7 +1,7 @@
-use chill_ffi::worker::callExternal;
-use chill_ffi::types::{FFIValue, FFIType};
 use std::sync::Once;
-use chill_ffi::setupZygote;
+use chillffi::setupZygote;
+use chillffi::worker::callExternal;
+use chillffi::types::{FFIValue, FFIType};
 // =================================================================================================
 
 static Init: Once = Once::new();
@@ -14,11 +14,13 @@ fn setup() -> ()
 }
 
 #[test]
-fn test_sqrt() -> ()
+fn testSqrt() -> ()
 {
   setup();
-  let args = vec![FFIValue::F64(4.0)];
-  let result = callExternal("libm.so.6", "sqrt", args, FFIType::F64).unwrap();
+  
+  let args: Vec<FFIValue> = vec![FFIValue::F64(4.0)];
+  let result: FFIValue = callExternal("libm.so.6", "sqrt", args, FFIType::F64).unwrap();
+  
   if let FFIValue::F64(val) = result {
     assert!((val - 2.0).abs() < f64::EPSILON);
   } else {
@@ -27,11 +29,13 @@ fn test_sqrt() -> ()
 }
 
 #[test]
-fn test_abs() -> ()
+fn testAbs() -> ()
 {
   setup();
-  let args = vec![FFIValue::I32(-5)];
-  let result = callExternal("libm.so.6", "abs", args, FFIType::I32).unwrap();
+  
+  let args: Vec<FFIValue> = vec![FFIValue::I32(-5)];
+  let result: FFIValue = callExternal("libm.so.6", "abs", args, FFIType::I32).unwrap();
+  
   if let FFIValue::I32(val) = result {
     assert_eq!(val, 5);
   } else {

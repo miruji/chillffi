@@ -1,5 +1,5 @@
 [package]
-name = "chill-ffi"
+name = "chillffi"
 version = "0.1.0"
 edition = "2024"
 
@@ -26,7 +26,6 @@ serde = { version = "1.0.228", features = ["derive"] }
 
 ctor = "1.0.13"
 # todo desc (Вроде как просто для тестов и других - чтобы видели зиготу setup)
-
 
 [lints.rust]
 non_snake_case = "allow"

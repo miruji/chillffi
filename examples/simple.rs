@@ -1,6 +1,6 @@
-use chill_ffi::setupZygote;
-use chill_ffi::worker::callExternal;
-use chill_ffi::types::{FFIValue, FFIType};
+use chillffi::setupZygote;
+use chillffi::worker::callExternal;
+use chillffi::types::{FFIValue, FFIType};
 // =================================================================================================
 
 fn main() -> ()
@@ -9,8 +9,8 @@ fn main() -> ()
   setupZygote().expect("Failed to setup zygote");
 
   // Тест 1: Вызов sqrt(4.0) из libm.so
-  let args = vec![FFIValue::F64(4.0)];
-  let result = callExternal(
+  let args: Vec<FFIValue> = vec![FFIValue::F64(4.0)];
+  let result: FFIValue = callExternal(
     "libm.so.6",  // На Ubuntu/Debian. На других системах: "libm.so" или "/usr/lib/x86_64-linux-gnu/libm.so.6"
     "sqrt",
     args,
@@ -28,8 +28,8 @@ fn main() -> ()
   }
 
   // Тест 2: Вызов abs(-5) из libm.so
-  let args = vec![FFIValue::I32(-5)];
-  let result = callExternal(
+  let args: Vec<FFIValue> = vec![FFIValue::I32(-5)];
+  let result: FFIValue = callExternal(
     "libm.so.6",
     "abs",
     args,
@@ -46,6 +46,7 @@ fn main() -> ()
     _ => panic!("Unexpected return type for abs"),
   }
 
+  //
   println!("All tests passed!");
 }
 

@@ -98,7 +98,7 @@ static ZygoteState: OnceLock<Mutex<ZygoteHandle>> = OnceLock::new();
 /// main() обязан вызвать это первой строкой, если первый аргумент == ZygoteFlag;
 /// Процесс порождён через Command (fork+exec) — интерпретатор RTS не прогревался,
 /// AST не парсился, кучи метаданных нет. Библиотеку заранее НЕ грузит.
-pub fn runAsZygote() -> !
+pub (super) fn runAsZygote() -> !
 {
   let socketPath: String = env::args().nth(2).expect("Zygote: missing socket path");
   let socket: UnixStream = UnixStream::connect(&socketPath).expect("Zygote: cannot connect to RTS");
@@ -107,7 +107,7 @@ pub fn runAsZygote() -> !
 
 /// Инициализация Зиготы; вызывать один раз, самой первой строкой обычного main(),
 /// до args-парсинга, до чтения файла, до parseLines/readTokens.
-pub fn initZygote() -> io::Result<()>
+pub(super) fn initZygote() -> io::Result<()>
 {
   let handle: ZygoteHandle = spawnZygote()?;
   ZygoteState.set(Mutex::new(handle))
@@ -238,6 +238,7 @@ fn supervisorLoop()
         Err(_) => { drop(guard); thread::sleep(std::time::Duration::from_millis(200)); }
       }
     }
+    //
   }
 }
 
@@ -261,12 +262,14 @@ fn readMessage(socket: &mut UnixStream) -> io::Result<Vec<u8>>
 }
 
 /// todo desc
-fn encode<T: Serialize>(value: &T) -> Vec<u8> {
+fn encode<T: Serialize>(value: &T) -> Vec<u8> 
+{
   let config = bincode::config::standard();
   bincode::serde::encode_to_vec(value, config).expect("encode failed")
 }
 /// todo desc
-fn decode<T: for<'a> Deserialize<'a>>(bytes: &[u8]) -> Result<T, bincode::error::DecodeError> {
+fn decode<T: for<'a> Deserialize<'a>>(bytes: &[u8]) -> Result<T, bincode::error::DecodeError> 
+{
   let config = bincode::config::standard();
   bincode::serde::decode_from_slice(bytes, config).map(|(decoded, _bytes_read)| decoded)
 }
