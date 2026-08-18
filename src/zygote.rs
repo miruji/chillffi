@@ -3,7 +3,7 @@ use std::io::{self, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::process::{Command, Child};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::thread;
 use serde::{Serialize, Deserialize};
 use crate::worker::executeFFI;
@@ -197,7 +197,7 @@ pub fn call(request: FFIRequest) -> Result<FFIResponse, String>
 {
   let bytes: Vec<u8> = encode(&request);
   let mutex: &Mutex<ZygoteHandle> = ZygoteState.get().expect("Zygote not initialized");
-  let mut guard = mutex.lock().unwrap();
+  let mut guard: MutexGuard<ZygoteHandle> = mutex.lock().unwrap();
 
   if let Ok(responseBytes) = sendAndReceive(&mut guard.socket, &bytes)
   {
@@ -206,6 +206,8 @@ pub fn call(request: FFIRequest) -> Result<FFIResponse, String>
 
   *guard = spawnZygote().map_err(|e| format!("Zygote respawn failed: {}", e))?;
   let responseBytes: Vec<u8> = sendAndReceive(&mut guard.socket, &bytes).map_err(|e| e.to_string())?;
+  drop(guard);
+  
   decode(&responseBytes).map_err(|e| e.to_string())
 }
 

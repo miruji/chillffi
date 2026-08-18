@@ -100,7 +100,7 @@ pub fn executeFFI(request: FFIRequest) -> Result<FFIValue, String>
     FFIType::Pointer => Type::pointer(),
   };
 
-  let cif: Cif = Cif::new(argsTypes.into_iter(), returnType);
+  let cif: Cif = Cif::new(argsTypes, returnType);
 
   // Подготавливаем хранилище для значений, на которые будут ссылаться аргументы
   let mut storage: Vec<Box<dyn Any>> = Vec::with_capacity(args.len());
