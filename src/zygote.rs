@@ -6,8 +6,8 @@ use std::process::{Command, Child};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::thread;
 use serde::{Serialize, Deserialize};
+use crate::ffi::value::{Type, Value};
 use crate::worker::executeFFI;
-use crate::types::{FFIType, FFIValue};
 // =================================================================================================
 
 /* todo
@@ -55,16 +55,16 @@ pub struct FFIRequest
   /// todo desc
   pub functionName: String,
   /// todo desc
-  pub args: Vec<FFIValue>,
+  pub args: Vec<Value>,
   /// todo desc
-  pub resultType: FFIType
+  pub resultType: Type
 }
 
 /// todo desc
 #[derive(Serialize, Deserialize)]
 pub enum FFIResponse
 {
-  Ok(FFIValue),
+  Ok(Value),
   Err(String)
 }
 

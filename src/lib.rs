@@ -1,6 +1,6 @@
 pub mod worker;
-pub mod types;
 pub mod zygote;
+pub mod ffi;
 // =================================================================================================
 use std::{env, io};
 use crate::zygote::{initZygote, runAsZygote, ZygoteFlag};

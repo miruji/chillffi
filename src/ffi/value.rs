@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 /// todo desc
 #[derive(Clone, Serialize, Deserialize)]
 #[derive(Debug)] // todo remove
-pub enum FFIValue
+pub enum Value
 {
   None, // Просто пустое значение
   //
@@ -35,7 +35,7 @@ pub enum FFIValue
 
 /// todo desc
 #[derive(Serialize, Deserialize)]
-pub enum FFIType
+pub enum Type
 {
   None, // Просто пустое значение
   //
