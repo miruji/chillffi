@@ -1,15 +1,14 @@
-use chill_ffi::tokenizer::{Token, TokenType};
-use chill_ffi::parser::StructureType;
 use chill_ffi::worker::callExternal;
-use chill_ffi::types::FFIValue;
+use chill_ffi::types::{FFIValue, FFIType};
 use std::sync::Once;
+use chill_ffi::zygote::initZygote;
 
-static INIT: Once = Once::new();
+static Init: Once = Once::new();
 
 fn setup()
 {
-  INIT.call_once(|| {
-    chill_ffi::zygote::initZygote().expect("Failed to init zygote");
+  Init.call_once(|| {
+    initZygote().expect("Failed to init zygote");
   });
 }
 
@@ -18,12 +17,12 @@ fn test_sqrt()
 {
   setup();
 
-  let mut arg_token = Token::new("4.0".to_string(), TokenType::Float);
+  let args = vec![FFIValue::F64(4.0)];
   let result = callExternal(
     "libm.so.6",
     "sqrt",
-    &mut [arg_token],
-    StructureType::F64,
+    args,
+    FFIType::F64,
   ).expect("FFI call failed");
 
   match result
@@ -38,12 +37,12 @@ fn test_abs()
 {
   setup();
 
-  let mut arg_token = Token::new("5".to_string(), TokenType::Int);
+  let args = vec![FFIValue::I32(-5)];
   let result = callExternal(
     "libm.so.6",
     "abs",
-    &mut [arg_token],
-    StructureType::I32,
+    args,
+    FFIType::I32,
   ).expect("FFI call failed");
 
   match result

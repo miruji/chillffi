@@ -2,178 +2,9 @@ use std::any::Any;
 use libloading::Library;
 use libffi::middle::{Arg, Cif, CodePtr, Type};
 use std::ffi::c_void;
-use serde::{Deserialize, Serialize};
-use crate::types::{FFIValue, FFIType, FFIRequest, FFIResponse};
+use crate::types::{FFIType, FFIValue};
 use crate::zygote;
-use crate::parser::StructureType;
-use crate::tokenizer::{Token, TokenType};
 use crate::zygote::{FFIRequest, FFIResponse};
-// =================================================================================================
-
-/// todo desc
-#[derive(Clone, Serialize, Deserialize)]
-#[derive(Debug)] // todo remove
-pub enum FFIValue
-{
-  None, // Просто пустое значение
-  //
-  U8(u8),
-  U16(u16),
-  U32(u32),
-  U64(u64),
-  Usize(usize), // todo Должно быть тут?
-  //
-  I8(i8),
-  I16(i16),
-  I32(i32),
-  I64(i64),
-  Isize(isize), // todo Должно быть тут?
-  //
-  F32(f32),
-  F64(f64),
-  //
-  Bool(bool),
-  // Универсальный контейнер для произвольных байтовых данных
-  ByteVector(Vec<u8>) // todo Не знаю насколько правильно это иметь тут, но
-                      //  это самый простой вариант передачи без нарушения адресного пространства.
-                      //  Но опять же кодировки и другие штуки как будут тут себя вести?
-                      //  Мб легче проброс данных по адресам или что-то?
-}
-
-/// todo desc
-//
-/// todo Работает так же как getStructureType() - и они могут быть вынесены в абстракцию?
-//
-/// todo Вообще надо сделать min/max/default для поведения примитивов.
-//
-/// todo По факту не нарушает типизацию, но тип может если был Usize(19) то для вызова быть U8(19),
-///  что по факту ошибка, так как будет сменен тип данных - важно его сохранять?
-impl TryFrom<&mut Token> for FFIValue
-{
-  type Error = String;
-
-  /// todo desc
-  fn try_from(token: &mut Token) -> Result<Self, Self::Error>
-  {
-    let dataType: &TokenType = token.get_data_type();
-
-    let data: String = match token.get_data().to_string() {
-      Some(s) => s,
-      None => return Err("Token data is empty".to_owned()),
-    };
-
-    // todo println!("try_from: {}:{}",data,dataType.to_string());
-
-    match dataType
-    {
-      TokenType::UInt =>
-      {
-        if let Ok(value) = data.parse::<u128>()
-        {
-          if value <= u8::MAX as u128         { Ok(FFIValue::U8(value as u8))         }
-          else if value <= u16::MAX as u128   { Ok(FFIValue::U16(value as u16))       }
-          else if value <= u32::MAX as u128   { Ok(FFIValue::U32(value as u32))       }
-          else if value <= u64::MAX as u128   { Ok(FFIValue::U64(value as u64))       }
-          else if value <= usize::MAX as u128 { Ok(FFIValue::Usize(value as usize))   }
-          else { Err(format!("UInt out of range: {}", value)) }
-        } else {
-          Err(format!("Failed to parse UInt: {}", data))
-        }
-      }
-      TokenType::Int =>
-      {
-        if let Ok(value) = data.parse::<i128>()
-        {
-          if value >= i8::MIN as i128 && value <= i8::MAX as i128            { Ok(FFIValue::I8(value as i8))       }
-          else if value >= i16::MIN as i128 && value <= i16::MAX as i128     { Ok(FFIValue::I16(value as i16))     }
-          else if value >= i32::MIN as i128 && value <= i32::MAX as i128     { Ok(FFIValue::I32(value as i32))     }
-          else if value >= i64::MIN as i128 && value <= i64::MAX as i128     { Ok(FFIValue::I64(value as i64))     }
-          else if value >= isize::MIN as i128 && value <= isize::MAX as i128 { Ok(FFIValue::Isize(value as isize)) }
-          else { Err(format!("Int out of range: {}", value)) }
-        } else {
-          Err(format!("Failed to parse Int: {}", data))
-        }
-      }
-      TokenType::UFloat | TokenType::Float =>
-      {
-        if let Ok(value) = data.parse::<f64>()
-        {
-          if value >= f32::MIN as f64 && value <= f32::MAX as f64 { Ok(FFIValue::F32(value as f32)) }
-          else if value >= f64::MIN && value <= f64::MAX          { Ok(FFIValue::F64(value))        }
-          else { Err(format!("Float out of range: {}", value)) }
-        } else {
-          Err(format!("Failed to parse Float: {}", data))
-        }
-      }
-      TokenType::String =>
-      {
-        Ok(FFIValue::ByteVector(data.into_bytes()))
-      }
-      _ => Err("Unsupported TokenType".to_owned()),
-    }
-  }
-}
-
-// =================================================================================================
-
-/// todo desc
-#[derive(Serialize, Deserialize)]
-pub enum FFIType
-{
-  None, // Просто пустое значение
-  //
-  U8,
-  U16,
-  U32,
-  U64,
-  Usize, // todo Должно быть тут?
-  //
-  I8,
-  I16,
-  I32,
-  I64,
-  Isize, // todo Должно быть тут?
-  //
-  F32,
-  F64,
-  //
-  Bool,
-  Pointer // Сырой указатель
-}
-
-impl TryFrom<StructureType> for FFIType
-{
-  type Error = String;
-
-  /// todo desc
-  fn try_from(ty: StructureType) -> Result<Self, Self::Error>
-  {
-    match ty
-    {
-      StructureType::None => Ok(FFIType::None),
-
-      StructureType::U8 => Ok(FFIType::U8),
-      StructureType::U16 => Ok(FFIType::U16),
-      StructureType::U32 => Ok(FFIType::U32),
-      StructureType::U64 => Ok(FFIType::U64),
-      StructureType::Usize => Ok(FFIType::Usize),
-
-      StructureType::I8 => Ok(FFIType::I8),
-      StructureType::I16 => Ok(FFIType::I16),
-      StructureType::I32 => Ok(FFIType::I32),
-      StructureType::I64 => Ok(FFIType::I64),
-      StructureType::Isize => Ok(FFIType::Isize),
-
-      StructureType::F32 => Ok(FFIType::F32),
-      StructureType::F64 => Ok(FFIType::F64),
-
-      StructureType::Bool => Ok(FFIType::Bool),
-
-      _ => Err(format!("Unsupported FFI type: {}", ty.to_string())),
-    }
-  }
-}
-
 // =================================================================================================
 
 /// Формирует запрос и отправляет его Зиготе;
@@ -185,25 +16,16 @@ impl TryFrom<StructureType> for FFIType
 pub fn callExternal(
   libraryPath: &str,
   methodName: &str,
-  parametersTokens: &mut [Token],
-  resultType: StructureType,
+  args: Vec<FFIValue>,
+  resultType: FFIType,
 ) -> Result<FFIValue, String>
 {
-  // 1. Преобразуем токены в FFIValue
-  let args: Vec<FFIValue> = parametersTokens
-    .iter_mut()
-    .map(FFIValue::try_from)
-    .collect::<Result<Vec<_>, _>>()?;
-
-  // 2. Преобразуем тип результата
-  let ffiResultType: FFIType = FFIType::try_from(resultType)?;
-
-  // 3. Собираем запрос и отправляем Зиготе
+  // Собираем запрос и отправляем Зиготе
   let request: FFIRequest = FFIRequest {
     libraryPath:  libraryPath.to_string(),
     functionName: methodName.to_string(),
     args,
-    resultType:   ffiResultType,
+    resultType,
   };
 
   match zygote::call(request)?

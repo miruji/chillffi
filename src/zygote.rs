@@ -7,7 +7,7 @@ use std::sync::{Mutex, OnceLock};
 use std::thread;
 use serde::{Serialize, Deserialize};
 use crate::worker::executeFFI;
-use crate::types::{FFIType, FFIValue, FFIRequest, FFIResponse};
+use crate::types::{FFIType, FFIValue};
 // =================================================================================================
 
 /* todo
