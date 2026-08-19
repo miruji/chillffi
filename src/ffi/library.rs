@@ -2,8 +2,8 @@ use crate::ffi::value::{Type, Value};
 use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
-use crate::zygote::{call, FFIRequest, FFIResponse};
+use std::sync::{Mutex, MutexGuard, OnceLock};
+use crate::zygote::{FFIRequest, FFIResponse, ZygoteStack};
 // =================================================================================================
 
 /// todo desc
@@ -34,23 +34,29 @@ impl std::fmt::Display for FFIError
 
 impl std::error::Error for FFIError {}
 
+impl From<String> for FFIError {
+  fn from(s: String) -> Self {
+    FFIError::Other(s)
+  }
+}
+
 // =================================================================================================
 
 /// todo desc
-static NEXT_LIBRARY_ID: AtomicU64 = AtomicU64::new(1);
+static NextLibraryID: AtomicU64 = AtomicU64::new(1);
 /// todo desc
-static REGISTERED_LIBRARIES: OnceLock<Mutex<HashMap<u64, String>>> = OnceLock::new();
+static RegisteredLibraries: OnceLock<Mutex<HashMap<u64, String>>> = OnceLock::new();
 
 /// todo desc
 fn nextLibraryId() -> u64
 {
-  NEXT_LIBRARY_ID.fetch_add(1, Ordering::SeqCst)
+  NextLibraryID.fetch_add(1, Ordering::SeqCst)
 }
 
 /// todo desc
 fn getRegistry() -> &'static Mutex<HashMap<u64, String>>
 {
-  REGISTERED_LIBRARIES.get_or_init(|| Mutex::new(HashMap::new()))
+  RegisteredLibraries.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// todo desc
@@ -88,77 +94,55 @@ fn callById(
   functionName: &str,
   args: Vec<Value>,
   resultType: Type,
-) -> Result<Value, FFIError>
+) -> Result<Value, FFIError> 
 {
-  // Получаем путь из реестра
-  let registry = getRegistry().lock().unwrap();
-  let libraryPath = registry.get(&libraryId)
+  let registry: MutexGuard<HashMap<u64, String>> = getRegistry().lock().unwrap();
+  let libraryPath: String = registry.get(&libraryId)
     .ok_or(FFIError::LibraryNotFound)?
     .clone();
   drop(registry);
 
-  // Формируем запрос через существующий протокол
-  let request = FFIRequest {
+  let request: FFIRequest = FFIRequest {
     libraryPath,
     functionName: functionName.to_string(),
     args,
     resultType,
   };
 
-  // Отправляем в зиготу
-  match call(request)
-  {
-    Ok(FFIResponse::Ok(value)) => Ok(value),
-    Ok(FFIResponse::Err(e)) => Err(FFIError::CallFailed(e)),
-    Err(e) => Err(FFIError::ZygoteCommunicationFailed(e)),
-  }
+  // Выбираем клон Зиготы, созданный в текущем блоке ffi!{}
+  ZygoteStack.with(|stack| {
+    let mut mut_stack = stack.borrow_mut();
+    let zygote = mut_stack.last_mut().ok_or(FFIError::ZygoteNotInitialized)?;
+
+    match zygote.call(request) {
+      Ok(FFIResponse::Ok(value)) => Ok(value),
+      Ok(FFIResponse::Err(e)) => Err(FFIError::CallFailed(e)),
+      Err(e) => Err(FFIError::ZygoteCommunicationFailed(e)),
+    }
+  })
 }
 
 // =================================================================================================
 
-/// todo desc
-pub struct Library
+#[doc(hidden)]
+pub struct __Library<const Allowed: bool = false>
 {
   libraryId: u64,
   libraryPath: String
 }
 
-/// todo desc
-pub fn load(libraryPath: &str) -> Result<Library, FFIError>
+// методы, доступные ВСЕГДА (id, и т.д.)
+impl<const Allowed: bool> __Library<Allowed>
 {
-  let libraryId: u64 = nextLibraryId();
-  let ownedPath: String = String::from(libraryPath);
-
-  registerLibrary(libraryId, &ownedPath);
-
-  match sendLoadLibrary(libraryId, &ownedPath)
-  {
-    Ok(()) =>
-    {
-      Ok(Library
-      {
-        libraryId,
-        libraryPath: ownedPath,
-      })
-    }
-    Err(error) =>
-    {
-      unregisterLibrary(libraryId);
-      Err(error)
-    }
-  }
-  //
-}
-
-impl Library
-{
-  /// todo desc
   pub fn id(&self) -> u64
   {
     self.libraryId
   }
+}
 
-  /// todo desc
+// методы, доступные ТОЛЬКО внутри ffi!{}
+impl __Library<true>
+{
   pub fn call(
     &self,
     functionName: &str,
@@ -166,22 +150,35 @@ impl Library
     resultType: Type,
   ) -> Result<Value, FFIError>
   {
-    callById(
-      self.libraryId,
-      functionName,
-      args,
-      resultType,
-    )
+    callById(self.libraryId, functionName, args, resultType)
   }
 
-  /// todo desc
   pub fn unload(self) -> Result<(), FFIError>
   {
     sendUnloadLibrary(self.libraryId)?;
     unregisterLibrary(self.libraryId);
     Ok(())
   }
+
+  pub fn load(libraryPath: &str) -> Result<__Library<true>, FFIError>
+  {
+    let libraryId: u64 = nextLibraryId();
+    let ownedPath: String = String::from(libraryPath);
+    registerLibrary(libraryId, &ownedPath);
+    match sendLoadLibrary(libraryId, &ownedPath)
+    {
+      Ok(()) => Ok(__Library { libraryId, libraryPath: ownedPath }),
+      Err(error) => { unregisterLibrary(libraryId); Err(error) }
+    }
+  }
 }
+
+// публичный тип снаружи — без load/call
+pub type Library = __Library<false>;
+
+// скрытый тип для ffi! — с load/call
+#[doc(hidden)]
+pub type __FFILibrary = __Library<true>;
 
 // =================================================================================================
 
