@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
 // =================================================================================================
 
-/// todo desc
-#[derive(Clone, Serialize, Deserialize)]
-#[derive(Debug)] // todo remove
+/// Значение, которое может быть передано между процессами 
+/// и использовано при вызове FFI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Value
 {
   None, // Просто пустое значение
@@ -33,7 +33,7 @@ pub enum Value
 
 // =================================================================================================
 
-/// todo desc
+/// Описание типа значения для определения аргументов и результата FFI
 #[derive(Serialize, Deserialize)]
 pub enum Type
 {

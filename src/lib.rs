@@ -10,7 +10,7 @@ use crate::zygote::{initZygote, runAsZygote, ZygoteFlag};
 /// Проверяет, не запущен ли процесс как зигота; если да – переключается в режим демона,
 /// иначе – инициализирует родительскую сторону.
 #[ctor::ctor(unsafe)]
-fn zygoteEntrypoint()
+fn zygoteEntrypoint() -> ()
 {
   let mut args = env::args_os();
   args.next();

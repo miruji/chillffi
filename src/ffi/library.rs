@@ -1,16 +1,19 @@
+use std::sync::MutexGuard;
+use crate::zygote::ClonedZygote;
+use crate::zygote::ZygoteState;
 use crate::ffi::value::{Type, Value};
-use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, OnceLock};
 use crate::zygote::{FFIRequest, FFIResponse, ZygoteStack};
 // =================================================================================================
 
-/// todo desc
+/// Ошибки, возникающие при работе с загрузкой библиотек и выполнением вызовов
 #[derive(Debug)]
 pub enum FFIError
 {
   ZygoteNotInitialized,
+  NoActiveZygoteScope,
   ZygoteCommunicationFailed(String),
   LibraryLoadFailed(String),
   LibraryNotFound,
@@ -32,72 +35,80 @@ impl std::fmt::Display for FFIError
   }
 }
 
-impl std::error::Error for FFIError {}
-
-impl From<String> for FFIError {
-  fn from(s: String) -> Self {
-    FFIError::Other(s)
+impl<E: std::error::Error + 'static> From<E> for FFIError
+{
+  fn from(err: E) -> Self {
+    Self::Other(err.to_string())
   }
 }
 
 // =================================================================================================
 
-/// todo desc
-static NextLibraryID: AtomicU64 = AtomicU64::new(1);
-/// todo desc
-static RegisteredLibraries: OnceLock<Mutex<HashMap<u64, String>>> = OnceLock::new();
+/// Счётчик для выдачи уникальных идентификаторов библиотекам
+static NextLibraryID: AtomicUsize = AtomicUsize::new(1);
+/// Глобальный реестр загруженных библиотек по их идентификаторам
+static RegisteredLibraries: OnceLock<Mutex<HashMap<usize, String>>> = OnceLock::new();
 
-/// todo desc
-fn nextLibraryId() -> u64
+/// Возвращает следующий уникальный идентификатор библиотеки
+fn nextLibraryId() -> usize
 {
   NextLibraryID.fetch_add(1, Ordering::SeqCst)
 }
 
-/// todo desc
-fn getRegistry() -> &'static Mutex<HashMap<u64, String>>
+/// Возвращает общий реестр зарегистрированных библиотек
+fn getRegistry() -> &'static Mutex<HashMap<usize, String>>
 {
   RegisteredLibraries.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// todo desc
-fn registerLibrary(id: u64, path: &str)
+/// Добавляет библиотеку в реестр по её идентификатору
+fn registerLibrary(id: usize, path: &str) -> ()
 {
   let mut registry = getRegistry().lock().unwrap();
   registry.insert(id, path.to_string());
 }
 
-/// todo desc
-fn unregisterLibrary(id: u64)
+/// Удаляет библиотеку из реестра по её идентификатору
+fn unregisterLibrary(id: usize) -> ()
 {
   let mut registry = getRegistry().lock().unwrap();
   registry.remove(&id);
 }
 
-/// todo desc
-fn sendLoadLibrary(_id: u64, _path: &str) -> Result<(), FFIError>
+/// Запрашивает загрузку библиотеки в текущую зиготу
+fn sendLoadLibrary(_id: usize, _path: &str) -> Result<(), FFIError>
 {
   // todo: Отправить ZygoteCommand::LoadLibrary в зиготу для кеширования
-  // Пока что библиотека будет загружаться при каждом вызове через callById
+  //   Пока что библиотека будет загружаться при каждом вызове через callById
+  //   - только резервирует место для будущего кеширования библиотек.
   Ok(())
 }
 
-/// todo desc
-fn sendUnloadLibrary(_id: u64) -> Result<(), FFIError>
+/// Запрашивает выгрузку библиотеки из текущей зиготы
+fn sendUnloadLibrary(_id: usize) -> Result<(), FFIError>
 {
   // todo: Отправить ZygoteCommand::UnloadLibrary в зиготу
+  //   Пока операция является заглушкой до реализации кеширования.
   Ok(())
 }
 
-/// todo desc
+/// Выполняет вызов FFI функции по идентификатору зарегистрированной библиотеки
 fn callById(
-  libraryId: u64,
+  libraryId: usize,
   functionName: &str,
   args: Vec<Value>,
   resultType: Type,
 ) -> Result<Value, FFIError> 
 {
-  let registry: MutexGuard<HashMap<u64, String>> = getRegistry().lock().unwrap();
-  let libraryPath: String = registry.get(&libraryId)
+  // Проверяем, инициализирована ли глобальная зигота в ZygoteState
+  if ZygoteState.get().is_none() {
+    return Err(FFIError::ZygoteNotInitialized);
+  }
+
+  // Достаем путь к `.so`/`.dll` из реестра и формируем FFIRequest
+  let registry: MutexGuard<HashMap<usize, String>> = getRegistry().lock().unwrap();
+  let libraryPath: String = registry
+    .get(&libraryId)
     .ok_or(FFIError::LibraryNotFound)?
     .clone();
   drop(registry);
@@ -108,41 +119,51 @@ fn callById(
     args,
     resultType,
   };
-
-  // Выбираем клон Зиготы, созданный в текущем блоке ffi!{}
+  
+  // Ищем активный клон в локальном стеке текущего потока
   ZygoteStack.with(|stack| {
-    let mut mut_stack = stack.borrow_mut();
-    let zygote = mut_stack.last_mut().ok_or(FFIError::ZygoteNotInitialized)?;
+    let mut mutStack = stack.borrow_mut();
 
+    // Если стек пуст — значит вызов идет вне контекста ffi!{}
+    let zygote: &mut ClonedZygote = mutStack
+      .last_mut()
+      .ok_or(FFIError::NoActiveZygoteScope)?;
+
+    // Выполняем FFI запрос через текущую зиготу
     match zygote.call(request) {
-      Ok(FFIResponse::Ok(value)) => Ok(value),
-      Ok(FFIResponse::Err(e)) => Err(FFIError::CallFailed(e)),
-      Err(e) => Err(FFIError::ZygoteCommunicationFailed(e)),
+      Ok(FFIResponse::Ok(val)) => Ok(val),
+      Ok(FFIResponse::Err(err)) => Err(FFIError::CallFailed(err)),
+      Err(err) => Err(FFIError::ZygoteCommunicationFailed(err)),
     }
   })
 }
 
 // =================================================================================================
 
+/// Дескриптор загруженной библиотеки с ограничением доступных методов
 #[doc(hidden)]
 pub struct __Library<const Allowed: bool = false>
 {
-  libraryId: u64,
+  // Идентификатор библиотеки внутри менеджера
+  libraryId: usize,
+  // Путь к загруженной библиотеке
   libraryPath: String
 }
 
-// методы, доступные ВСЕГДА (id, и т.д.)
+/// Методы, доступные всегда (id, и т.д.)
 impl<const Allowed: bool> __Library<Allowed>
 {
-  pub fn id(&self) -> u64
+  /// Возвращает идентификатор библиотеки
+  pub fn id(&self) -> usize
   {
     self.libraryId
   }
 }
 
-// методы, доступные ТОЛЬКО внутри ffi!{}
+// Методы, доступные только внутри ffi!{}
 impl __Library<true>
 {
+  /// Выполняет вызов функции из загруженной библиотеки
   pub fn call(
     &self,
     functionName: &str,
@@ -153,6 +174,7 @@ impl __Library<true>
     callById(self.libraryId, functionName, args, resultType)
   }
 
+  /// Выгружает библиотеку и удаляет её из реестра
   pub fn unload(self) -> Result<(), FFIError>
   {
     sendUnloadLibrary(self.libraryId)?;
@@ -160,68 +182,25 @@ impl __Library<true>
     Ok(())
   }
 
-  pub fn load(libraryPath: &str) -> Result<__Library<true>, FFIError>
+  /// Загружает библиотеку и регистрирует её для дальнейших вызовов
+  pub fn load(libraryPath: &str) -> Result<Self, FFIError>
   {
-    let libraryId: u64 = nextLibraryId();
+    let libraryId: usize = nextLibraryId();
     let ownedPath: String = String::from(libraryPath);
     registerLibrary(libraryId, &ownedPath);
     match sendLoadLibrary(libraryId, &ownedPath)
     {
-      Ok(()) => Ok(__Library { libraryId, libraryPath: ownedPath }),
+      Ok(()) => Ok(Self{ libraryId, libraryPath: ownedPath }),
       Err(error) => { unregisterLibrary(libraryId); Err(error) }
     }
   }
 }
 
-// публичный тип снаружи — без load/call
+/// Публичный тип снаружи — без load/call
 pub type Library = __Library<false>;
 
-// скрытый тип для ffi! — с load/call
+/// Скрытый тип для ffi! — с load/call
 #[doc(hidden)]
 pub type __FFILibrary = __Library<true>;
-
-// =================================================================================================
-
-/// todo desc
-#[derive(Serialize, Deserialize)]
-pub enum CallTarget
-{
-  Path(String),
-  LibraryId(u64)
-}
-
-/// todo desc
-#[derive(Serialize, Deserialize)]
-pub struct CallRequest
-{
-  pub target: CallTarget,
-  pub functionName: String,
-  pub args: Vec<Value>,
-  pub resultType: Type
-}
-
-/// todo desc
-#[derive(Serialize, Deserialize)]
-pub enum ZygoteCommand
-{
-  LoadLibrary(LoadLibraryRequest),
-  UnloadLibrary(UnloadLibraryRequest),
-  Call(CallRequest)
-}
-
-/// todo desc
-#[derive(Serialize, Deserialize)]
-pub struct LoadLibraryRequest
-{
-  pub libraryId: u64,
-  pub libraryPath: String
-}
-
-/// todo desc
-#[derive(Serialize, Deserialize)]
-pub struct UnloadLibraryRequest
-{
-  pub libraryId: u64
-}
 
 // =================================================================================================

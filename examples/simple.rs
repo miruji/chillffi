@@ -10,9 +10,9 @@ fn main() -> ()
   
   // Тест 1: Вызов sqrt(4.0) из libm.so
   let result: Value = ffi!{
-    let libm: Library = Library::load("libm.so.6").map_err(|e| e.to_string())?;
+    let libm: Library = Library::load("libm.so.6")?;
     let args: Vec<Value> = vec![Value::F64(4.0)];
-    Ok(libm.call("sqrt", args, Type::F64).map_err(|e| e.to_string())?)
+    Ok(libm.call("sqrt", args, Type::F64)?)
   }.expect("FFI call failed");
 
   match result
@@ -27,9 +27,9 @@ fn main() -> ()
 
   // Тест 2: Вызов abs(-5) из libm.so
   let result: Value = ffi!{
-    let libm = Library::load("libm.so.6").map_err(|e| e.to_string())?;
-    let args = vec![Value::I32(-5)];
-    Ok(libm.call("abs", args, Type::I32).map_err(|e| e.to_string())?)
+    let libm: Library = Library::load("libm.so.6")?;
+    let args: Vec<Value> = vec![Value::I32(-5)];
+    Ok(libm.call("abs", args, Type::I32)?)
   }.expect("FFI call failed");
 
   match result
