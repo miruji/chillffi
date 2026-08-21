@@ -1,3 +1,4 @@
+use crate::ffi::errors::FFIError;
 use std::cell::RefCell;
 use std::env;
 use std::io::{self, Read, Write};
@@ -16,34 +17,22 @@ use crate::worker::executeFFI;
 // =================================================================================================
 
 /* todo
-    Есть хорошая статья https://kobzol.github.io/rust/2024/01/28/process-spawning-performance-in-rust.html
-    Можно попробовать сделать что-то из этого, для улучшения работы:
-    | Сценарий             | Решение                                |
-    | -------------------- | -------------------------------------- |
-    | десятки процессов    | `Command` нормально                    |
-    | тысячи процессов/сек | проверять glibc/kernel                 |
-    | большой RSS          | избегать fork                          |
-    | HPC                  | использовать worker pool               |
-    | много env            | минимизировать environment             |
-    | Rust async           | `spawn_blocking` или отдельные workers |
-    Возможно есть более лучшие способы.
-
-   todo
-    Кроме того есть еще несколько направлений:
-    1. Парная работа. Идея простая - есть 1 зигота для клонирования и 2 её клона.
-       Собственно пока один работает - другая готова принять удар следом за ней. 
-       Это должно хорошо снижать нагрузку в задачах, когда FFI идут друг за другом.
-    2. Динамический прогрев зигот. Идея тоже простая - в зависимости от нагрузки 
-       мы добавляем или уменьшаем количество процессов.
-       Это можно сделать разными алгоритмами. 
-       Это уже не обязательная и экспериментальная область.
-    3. Разделение Runtime на 2 части - где зигота как процесс изначально даже 
-       не будет видеть основной Runtime. Что-то вроде 2 программы в одной. 
-       Но я не хочу делать 2 программы - чтобы файл был один. 
-       Это можно реализовать разными способами. Идея простая - 
-       даже если зигота не использует инструкции Runtime - 
-       то она все равно объявляет их и они существуют внутри, 
-       хотя никогда не будут использованы. Это тоже экспериментальное направление.
+    There are several possible directions for improvements and experiments:
+    1. Pair work. The idea is simple - there is 1 zygote for cloning and 2 of its clones.
+       Essentially, this is a pool of cloned zygotes. So there would be 3 of them in total.
+       Basically, while one is working, another one is ready to take the hit right after it.
+       This should significantly reduce the load in tasks where FFIs go one after another.
+    2. Dynamic zygote warming. The idea is also simple - depending on the load,
+       we increase or decrease the number of cloned zygotes.
+       This can be done using different algorithms.
+    3. Splitting the Runtime into 2 parts - where the main zygote as a process initially
+       will not even see the main Runtime. Something like 2 programs inside one.
+       But making 2 programs is not a great approach - there needs to be a single file.
+       This can be implemented in different ways. The idea is simple -
+       even if the main zygote does not use Runtime instructions,
+       it still declares them and they exist inside,
+       although they will never be used.
+       In some way, exec() and ctor solve this, but this solution fully solves it.
 */
 
 // =================================================================================================
@@ -54,24 +43,30 @@ pub const ZygoteFlag: &str = "__zygote";
 
 /// Request for FFI execution, sent entirely to the zygote
 #[derive(Serialize, Deserialize)]
-pub struct FFIRequest
+pub enum FFIRequest
 {
-  /// Path to the library containing the called function
-  pub libraryPath: String,
-  /// Function name to call in the loaded library
-  pub functionName: String,
-  /// Arguments passed to the function
-  pub args: Vec<Value>,
-  /// Expected return value type
-  pub resultType: Type
+  /// todo desc
+  Call { libraryPath: String, functionName: String, args: Vec<Value>, resultType: Type },
+  
+  /// todo desc
+  Alloc { length: usize },
+  /// todo desc
+  Free { pointer: usize },
+  
+  /// todo desc
+  ReadMemory { pointer: usize, length: usize },
+  /// todo desc
+  WriteMemory { pointer: usize, value: Value }
 }
 
 /// Response to the request with the execution result or error
 #[derive(Serialize, Deserialize)]
 pub enum FFIResponse
 {
+  /// todo desc
   Ok(Value),
-  Err(String)
+  /// todo desc
+  Err(FFIError)
 }
 
 /// Controls the zygote process and 
@@ -113,15 +108,18 @@ impl ClonedZygote
   /// Requests a clone from the main zygote and returns its RAII handle
   pub fn getMeClone() -> io::Result<Self>
   {
-    let mutex: &Mutex<ZygoteHandle> = ZygoteState.get().expect("Zygote not initialized");
-    let mut guard: MutexGuard<ZygoteHandle> = mutex.lock().unwrap();
+    let mutex: &Mutex<ZygoteHandle> = ZygoteState.get()
+      .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Zygote not initialized"))?;
+    let mut guard: MutexGuard<ZygoteHandle> = mutex.lock()
+      .map_err(|_| io::Error::new(io::ErrorKind::Other, "Zygote mutex poisoned"))?;
 
     // Sends a signal to create a clone
     writeMessage(&mut guard.socket, &[1u8])?;
 
     // Receives the clone PID
-    let pidBytes: Vec<u8> = readMessage(&mut guard.socket)?;
-    let pid: i32 = i32::from_le_bytes(pidBytes.try_into().unwrap());
+    let mut pidBytes: [u8; 4] = [0u8; 4];
+    guard.socket.read_exact(&mut pidBytes)?;
+    let pid: i32 = i32::from_le_bytes(pidBytes);
 
     // Read the socket descriptor directly from RAM
     let fd: RawFd = recvFd(&mut guard.socket)?;
@@ -134,8 +132,10 @@ impl ClonedZygote
   /// FFI call inside a specific clone
   pub fn call(&mut self, request: FFIRequest) -> Result<FFIResponse, String>
   {
-    let bytes: Vec<u8> = encode(&request);
-    let responseBytes: Vec<u8> = sendAndReceive(&mut self.socket, &bytes).map_err(|e| e.to_string())?;
+    let bytes: Vec<u8> = encode(&request).map_err(|e| e.to_string())?;
+    let responseBytes: Vec<u8> = sendAndReceive(&mut self.socket, &bytes)
+      .map_err(|e| format!("Zygote clone IPC failed: {}", e))?;
+
     decode(&responseBytes).map_err(|e| e.to_string())
   }
 }
@@ -224,7 +224,9 @@ pub(super) fn spawnZygote() -> io::Result<ZygoteHandle>
   let (runtimeSocket, zygoteSocket): (UnixStream, UnixStream) = UnixStream::pair()?;
   
   //
-  let currentExe: PathBuf = env::current_exe()?; // todo Может failed, если путь к исполняемому файлу слишком длинный или нет прав?
+  let currentExe: PathBuf = env::current_exe()?;
+  // todo Might fail if the path to the executable file 
+  //  is too long or there are no permissions?
   let process: Child = Command::new(currentExe)
     .arg(ZygoteFlag)
     .stdin(Stdio::from(OwnedFd::from(zygoteSocket)))
@@ -280,7 +282,7 @@ fn zygoteLoop(mut socket: UnixStream) -> !
       pid => {
         // Main zygote: send the PID and forward the socket descriptor to the Runtime
         drop(cloneSocket);
-        if writeMessage(&mut socket, &pid.to_le_bytes()).is_ok() {
+        if socket.write_all(&pid.to_le_bytes()).is_ok() {
           let _ = sendFd(&mut socket, runtimeSocket.as_raw_fd());
         }
       }
@@ -305,7 +307,12 @@ fn cloneLoop(mut socket: UnixStream) -> !
     };
 
     let response: FFIResponse = handleRequest(&requestBytes, &mut libraryCache);
-    if writeMessage(&mut socket, &encode(&response)).is_err() {
+    let encodedResponse: Vec<u8> = match encode(&response) {
+      Ok(bytes) => bytes,
+      Err(_) => std::process::exit(1),
+    };
+
+    if writeMessage(&mut socket, &encodedResponse).is_err() {
       std::process::exit(0);
     }
   }
@@ -321,33 +328,27 @@ fn handleRequest(requestBytes: &[u8], cache: &mut FxHashMap<String, Library>) ->
     Ok(request) => match executeFFI(request, cache)
     {
       Ok(value) => FFIResponse::Ok(value),
-      Err(e)    => FFIResponse::Err(e),
+      Err(e) => FFIResponse::Err(e)
     },
-    Err(e) => FFIResponse::Err(format!("Bad request: {}", e)),
+    Err(e) => FFIResponse::Err(e)
   }
 }
 
 // =================================================================================================
 
-/// Called from worker - callExternal();
-///
-/// upon loss of connection with the zygote — 
-/// recreates it (via Command) and retries the request once.
+/// Called from worker — callExternal(). Будет всего одна попытка.
 pub fn call(request: FFIRequest) -> Result<FFIResponse, String>
 {
-  let bytes: Vec<u8> = encode(&request);
-  let mutex: &Mutex<ZygoteHandle> = ZygoteState.get().expect("Zygote not initialized");
-  let mut guard: MutexGuard<ZygoteHandle> = mutex.lock().unwrap();
+  let mutex: &Mutex<ZygoteHandle> = ZygoteState.get()
+    .ok_or_else(|| "Zygote not initialized".to_string())?;
+  let mut guard: MutexGuard<ZygoteHandle> = mutex.lock()
+    .map_err(|_| "Zygote mutex poisoned".to_string())?;
 
-  if let Ok(responseBytes) = sendAndReceive(&mut guard.socket, &bytes)
-  {
-    return decode(&responseBytes).map_err(|e| e.to_string());
-  }
-
-  *guard = spawnZygote().map_err(|e| format!("Zygote respawn failed: {}", e))?;
-  let responseBytes: Vec<u8> = sendAndReceive(&mut guard.socket, &bytes).map_err(|e| e.to_string())?;
+  let bytes: Vec<u8> = encode(&request).map_err(|e| e.to_string())?;
+  let responseBytes: Vec<u8> = sendAndReceive(&mut guard.socket, &bytes)
+    .map_err(|e| e.to_string())?;
   drop(guard);
-  
+
   decode(&responseBytes).map_err(|e| e.to_string())
 }
 
@@ -367,12 +368,12 @@ fn supervisorLoop() -> ()
   {
     let pidToWait: u32 = {
       let mutex: &Mutex<ZygoteHandle> = match ZygoteState.get() { Some(m) => m, None => return };
-      mutex.lock().unwrap().process.id()
+      mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).process.id()
     };
     unsafe { libc::waitpid(pidToWait as libc::pid_t, std::ptr::null_mut(), 0); }
 
     let mutex: &Mutex<ZygoteHandle> = ZygoteState.get().unwrap();
-    let mut guard: MutexGuard<ZygoteHandle> = mutex.lock().unwrap();
+    let mut guard: MutexGuard<ZygoteHandle> = mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     if guard.process.id() == pidToWait // Not recreated in parallel yet through call()
     {
       match spawnZygote()
@@ -405,16 +406,19 @@ fn readMessage(socket: &mut UnixStream) -> io::Result<Vec<u8>>
 }
 
 /// Serializes a value into a byte representation
-pub(super) fn encode<T: Serialize>(value: &T) -> Vec<u8> 
+pub(super) fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, FFIError>
 {
   let config: Configuration = bincode::config::standard();
-  bincode::serde::encode_to_vec(value, config).expect("encode failed")
+  bincode::serde::encode_to_vec(value, config)
+    .map_err(|e| FFIError::EncodeFailed(format!("Encode failed: {}", e)))
 }
 /// Deserializes a byte representation back into a value
-pub(super) fn decode<T: for<'a> Deserialize<'a>>(bytes: &[u8]) -> Result<T, bincode::error::DecodeError> 
+pub(super) fn decode<T: for<'a> Deserialize<'a>>(bytes: &[u8]) -> Result<T, FFIError>
 {
   let config: Configuration = bincode::config::standard();
-  bincode::serde::decode_from_slice(bytes, config).map(|(decoded, _bytes_read)| decoded)
+  bincode::serde::decode_from_slice(bytes, config)
+    .map(|(decoded, _)| decoded)
+    .map_err(|e| FFIError::DecodeFailed(format!("Decode failed: {}", e)))
 }
 
 // =================================================================================================

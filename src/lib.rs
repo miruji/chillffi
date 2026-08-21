@@ -11,7 +11,7 @@ pub mod ffi;
 
 // =================================================================================================
 
-use std::{env, io};
+use std::{env};
 use crate::zygote::{initZygote, runAsZygote, ZygoteFlag};
 
 // =================================================================================================
@@ -31,14 +31,9 @@ fn zygoteEntrypoint() -> ()
       runAsZygote();
     }
   }
-  //
-}
 
-/// Zygote initialization; call once, 
-/// as the very first line of the normal main().
-pub fn setupZygote() -> io::Result<()>
-{
-  initZygote()
+  // Do this once to start the main zygote
+  initZygote().expect("Failed to setup zygote");
 }
 
 // =================================================================================================
@@ -63,48 +58,51 @@ pub fn setupZygote() -> io::Result<()>
 #[macro_export]
 macro_rules! ffi 
 {
-  ($($body:tt)*) => 
+  // Вариант с доступом к Scope. `ffi!(|scope| {})`. 
+  // Может быть любое имя scope - главное без повторений внутри {}.
+  // Scope<'g> заимствует ScopeGuard этого блока, поэтому AllocatedMemory<'g>
+  // не может быть возвращена наружу — это ловит компилятор, а не мы.
+  (|$scopeName:ident| { $($body:tt)* }) => 
   {
-    (|| -> Result<_, $crate::ffi::library::FFIError> 
+    (|| -> Result<_, $crate::ffi::errors::FFIError> 
     {
+      #[allow(unused_imports)]
       use $crate::ffi::library::__FFILibrary as Library;
-      use $crate::zygote::ClonedZygote;
-      use $crate::zygote::ZygoteGuard;
-
+ 
       // Creating a clone-zygote from the main one
-      let zygote: ClonedZygote = ClonedZygote::getMeClone()
-        .map_err(|e| $crate::ffi::library::FFIError::Other(e.to_string()))?;
-      
+      let zygote = $crate::zygote::ClonedZygote::getMeClone()?;
+ 
       // Registering the clone-zygote in the current thread's ZygoteStack
-      let _guard: ZygoteGuard = ZygoteGuard::enter(zygote);
-
+      let _guard = $crate::zygote::ZygoteGuard::enter(zygote);
+ 
+      // ScopeGuard живёт строго в границах этого блока; $scopeName заимствует его.
+      let _scopeGuard = $crate::ffi::scope::ScopeGuard::new();
+      let $scopeName = $crate::ffi::scope::Scope::new(&_scopeGuard);
+ 
       // Executing the body
       $($body)*
     })()
   };
-}
-
-// =================================================================================================
-
-#[cfg(test)]
-pub mod tests 
-{
-  use std::sync::Once;
-  // ===============================================================================================
-  
-  static Init: Once = Once::new();
-
-  /// Initializes the FFI environment once before running tests.
-  ///
-  /// Uses Once for a safe one-time execution of setupZygote().
-  pub fn setup() 
+ 
+  // Вариант без Scope — если alloc() не нужен, ScopeGuard вообще не создаётся.
+  ($($body:tt)*) => 
   {
-    Init.call_once(|| {
-      super::setupZygote().expect("Failed to setup zygote");
-    });
-  }
+    (|| -> Result<_, $crate::ffi::errors::FFIError> 
+    {
+      #[allow(unused_imports)]
+      use $crate::ffi::library::__FFILibrary as Library;
+ 
+      // Creating a clone-zygote from the main one
+      let zygote = $crate::zygote::ClonedZygote::getMeClone()?;
+ 
+      // Registering the clone-zygote in the current thread's ZygoteStack
+      let _guard = $crate::zygote::ZygoteGuard::enter(zygote);
+ 
+      // Executing the body
+      $($body)*
+    })()
+  };
 
-  // ===============================================================================================
 }
 
 // =================================================================================================

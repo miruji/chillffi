@@ -17,10 +17,10 @@ _(In the future, an expansion of the functionality for working with FFI is plann
 
 ## ✨ Features
 
-* 🛡️ **Crash Isolation**: A crash or panic inside unreliable FFI code does not break or corrupt the main process.
-* ⚡ **Zygote Model (Zygote)**: Fast forking and spawning of isolated workers with minimal overhead.
-* 🚀 **In-memory IPC**: Transfer of file descriptors and data through sockets without accessing the disk.
-* 🧩 **Dynamic FFI**: On-the-fly function calls without the need to compile static C bindings.
+- 🛡️ **Crash Isolation**: A crash or panic inside unreliable FFI code does not break or corrupt the main process.
+- ⚡ **Zygote Model (Zygote)**: Fast forking and spawning of isolated workers with minimal overhead.
+- 🚀 **In-memory IPC**: Transfer of file descriptors and data through sockets without accessing the disk.
+- 🧩 **Dynamic FFI**: On-the-fly function calls without the need to compile static C bindings.
 
 ---
 
@@ -108,6 +108,8 @@ This is also different from the WASM approach - because we preserve a true nativ
 3. Data and descriptors are transferred through a secure socket channel in memory.
 4. In case of errors, the supervisor intercepts the worker crash and returns the error to Rust, keeping your application stable.
 
+<!-- ## 🧭 Roadmap -->
+
 ## 📄 License
 
 The source code is distributed under the [FCL](LICENSE.md) license.
@@ -124,3 +126,5 @@ But if very simply, for those who just work and want to use it:
 - Commercial use with modifications → requires the author's permission or opening the changes
 
 Keep this in mind for your projects.
+
+<!-- ## 🧠 Contributing -->

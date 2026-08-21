@@ -1,13 +1,9 @@
 use chillffi::ffi::value::{Type, Value};
-use chillffi::setupZygote;
 use chillffi::ffi;
 // =================================================================================================
 
 fn main() -> ()
 {
-  // If launched as a zygote, switch to request processing mode
-  setupZygote().expect("Failed to setup zygote");
-
   // Test 1: Call sqrt(4.0) from libm.so
   let result: Value = ffi!{
     let libm: Library = Library::load("libm.so.6")?;

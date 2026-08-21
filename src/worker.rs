@@ -1,3 +1,4 @@
+use crate::ffi::errors::FFIError;
 use std::any::Any;
 use libloading::Library;
 use libffi::middle::{Arg, Cif, CodePtr};
@@ -23,7 +24,7 @@ pub fn callExternal(
 ) -> Result<Value, String>
 {
   // Build the request
-  let request: FFIRequest = FFIRequest {
+  let request: FFIRequest = FFIRequest::Call {
     libraryPath: libraryPath.to_string(),
     functionName: methodName.to_string(),
     args,
@@ -34,38 +35,34 @@ pub fn callExternal(
   match zygote::call(request)?
   {
     FFIResponse::Ok(value) => Ok(value),
-    FFIResponse::Err(e) => Err(e),
+    FFIResponse::Err(e) => Err(e.to_string()),
   }
 }
 
 // =================================================================================================
 
-impl TryFrom<&Value> for libffi::middle::Type 
+// todo desc
+fn toCifTypes(val: &Value) -> Result<Vec<libffi::middle::Type>, FFIError>
 {
-  type Error = String;
-
-  /// Determines the argument type for the C function
-  /// and immediately filters out None, which cannot be passed.
-  fn try_from(val: &Value) -> Result<Self, Self::Error> 
+  match val
   {
-    match val 
-    {
-      Value::U8(_) => Ok(libffi::middle::Type::u8()),
-      Value::U16(_) => Ok(libffi::middle::Type::u16()),
-      Value::U32(_) => Ok(libffi::middle::Type::u32()),
-      Value::U64(_) => Ok(libffi::middle::Type::u64()),
-      Value::Usize(_) => Ok(libffi::middle::Type::usize()),
-      Value::I8(_) => Ok(libffi::middle::Type::i8()),
-      Value::I16(_) => Ok(libffi::middle::Type::i16()),
-      Value::I32(_) => Ok(libffi::middle::Type::i32()),
-      Value::I64(_) => Ok(libffi::middle::Type::i64()),
-      Value::Isize(_) => Ok(libffi::middle::Type::isize()),
-      Value::F32(_) => Ok(libffi::middle::Type::f32()),
-      Value::F64(_) => Ok(libffi::middle::Type::f64()),
-      Value::Bool(_) => Ok(libffi::middle::Type::u8()),
-      Value::ByteVector(_) => Ok(libffi::middle::Type::pointer()),
-      Value::None => Err("Cannot pass None as argument".to_string()),
-    }
+    Value::U8(_) => Ok(vec![libffi::middle::Type::u8()]),
+    Value::U16(_) => Ok(vec![libffi::middle::Type::u16()]),
+    Value::U32(_) => Ok(vec![libffi::middle::Type::u32()]),
+    Value::U64(_) => Ok(vec![libffi::middle::Type::u64()]),
+    Value::Usize(_) => Ok(vec![libffi::middle::Type::usize()]),
+    Value::I8(_) => Ok(vec![libffi::middle::Type::i8()]),
+    Value::I16(_) => Ok(vec![libffi::middle::Type::i16()]),
+    Value::I32(_) => Ok(vec![libffi::middle::Type::i32()]),
+    Value::I64(_) => Ok(vec![libffi::middle::Type::i64()]),
+    Value::Isize(_) => Ok(vec![libffi::middle::Type::isize()]),
+    Value::F32(_) => Ok(vec![libffi::middle::Type::f32()]),
+    Value::F64(_) => Ok(vec![libffi::middle::Type::f64()]),
+    Value::Bool(_) => Ok(vec![libffi::middle::Type::u8()]),
+    Value::Pointer(_) => Ok(vec![libffi::middle::Type::pointer()]),
+    Value::RawString(_) | Value::CString(_) => Ok(vec![libffi::middle::Type::pointer()]),
+    Value::String(_) => Ok(vec![libffi::middle::Type::pointer(), libffi::middle::Type::usize()]),
+    Value::None => Err(FFIError::BadArgument("Cannot pass Value::None as argument".to_string()))
   }
 }
 
@@ -77,21 +74,21 @@ impl From<&Type> for libffi::middle::Type
   {
     match t 
     {
-      Type::None => libffi::middle::Type::void(),
-      Type::U8 => libffi::middle::Type::u8(),
-      Type::U16 => libffi::middle::Type::u16(),
-      Type::U32 => libffi::middle::Type::u32(),
-      Type::U64 => libffi::middle::Type::u64(),
-      Type::Usize => libffi::middle::Type::usize(),
-      Type::I8 => libffi::middle::Type::i8(),
-      Type::I16 => libffi::middle::Type::i16(),
-      Type::I32 => libffi::middle::Type::i32(),
-      Type::I64 => libffi::middle::Type::i64(),
-      Type::Isize => libffi::middle::Type::isize(),
-      Type::F32 => libffi::middle::Type::f32(),
-      Type::F64 => libffi::middle::Type::f64(),
-      Type::Bool => libffi::middle::Type::u8(),
-      Type::Pointer => libffi::middle::Type::pointer(),
+      Type::None => Self::void(),
+      Type::U8 => Self::u8(),
+      Type::U16 => Self::u16(),
+      Type::U32 => Self::u32(),
+      Type::U64 => Self::u64(),
+      Type::Usize => Self::usize(),
+      Type::I8 => Self::i8(),
+      Type::I16 => Self::i16(),
+      Type::I32 => Self::i32(),
+      Type::I64 => Self::i64(),
+      Type::Isize => Self::isize(),
+      Type::F32 => Self::f32(),
+      Type::F64 => Self::f64(),
+      Type::Bool => Self::u8(),
+      Type::Pointer => Self::pointer(),
     }
   }
 }
@@ -99,10 +96,17 @@ impl From<&Type> for libffi::middle::Type
 /// Keeps the arguments in the storage buffer,
 /// so that they are not removed from memory during the C call,
 /// and collects pointers to them.
+/// 
+/// # Memory Lifetime Constraint:
+/// All heap allocations for string buffers (`RawString`, `CString`, `String`) 
+/// are strictly temporary (transient) and guaranteed to be valid ONLY for the duration 
+/// of the FFI call; When `prepareFFIArgs` storage goes out of scope, Rust automatically 
+/// reclaims all vector allocations. If the C side needs to retain this data beyond 
+/// the function execution, it must make its own deep copy (e.g., via `memcpy` or `strdup`).
 fn prepareFFIArgs<'a>(
   args: &'a [Value],
   storage: &'a mut Vec<Box<dyn Any>>,
-) -> Result<Vec<Arg<'a>>, String> 
+) -> Result<Vec<Arg<'a>>, FFIError> 
 {
   // Prepare storage for the values
   // that the arguments will reference.
@@ -123,16 +127,28 @@ fn prepareFFIArgs<'a>(
       Value::F32(v) => storage.push(Box::new(*v)),
       Value::F64(v) => storage.push(Box::new(*v)),
       Value::Bool(b) => storage.push(Box::new(if *b { 1u8 } else { 0u8 })),
-      Value::ByteVector(v) => 
-      { // For a byte vector, pass a pointer to the data;
-        // Important: If the C code needs it for a long time, it is its responsibility.
-        // The pointer will be removed by us because it is temporary 
-        // + due to the zygote process operation.
+      Value::Pointer(addr) => {
+        let ptr: *mut c_void = *addr as *mut c_void;
+        storage.push(Box::new(ptr)); // Pointer
+      }
+      Value::RawString(v) => {
         let mut vec: Vec<u8> = v.clone();
         let pointer: *mut c_void = vec.as_mut_ptr() as *mut c_void;
         storage.push(Box::new((vec, pointer)));
       }
-      Value::None => return Err("Cannot pass None".to_string()),
+      Value::CString(v) => {
+        let mut vec: Vec<u8> = v.clone();
+        if !vec.ends_with(&[0]) { vec.push(0); } // Guarantee \0
+        let pointer: *mut c_void = vec.as_mut_ptr() as *mut c_void;
+        storage.push(Box::new((vec, pointer)));
+      }
+      Value::String(v) => {
+        let mut vec: Vec<u8> = v.clone();
+        let pointer: *mut c_void = vec.as_mut_ptr() as *mut c_void;
+        let len: usize = vec.len();
+        storage.push(Box::new((vec, pointer, len))); // Saving the length
+      }
+      Value::None => return Err(FFIError::BadArgument("Cannot pass Value::None".to_string()))
     }
   }
 
@@ -143,64 +159,71 @@ fn prepareFFIArgs<'a>(
     match arg 
     {
       Value::U8(_) => {
-        let val: &u8 = storage[i].downcast_ref::<u8>().unwrap();
+        let val: &u8 = downcastRef(&storage[i])?;
         argsFfi.push(Arg::new(val));
       }
       Value::U16(_) => {
-        let val: &u16 = storage[i].downcast_ref::<u16>().unwrap();
+        let val: &u16 = downcastRef(&storage[i])?;
         argsFfi.push(Arg::new(val));
       }
       Value::U32(_) => {
-        let val: &u32 = storage[i].downcast_ref::<u32>().unwrap();
+        let val: &u32 =downcastRef(&storage[i])?;
         argsFfi.push(Arg::new(val));
       }
       Value::U64(_) => {
-        let val: &u64 = storage[i].downcast_ref::<u64>().unwrap();
+        let val: &u64 = downcastRef(&storage[i])?;
         argsFfi.push(Arg::new(val));
       }
       Value::Usize(_) => {
-        let val: &usize = storage[i].downcast_ref::<usize>().unwrap();
+        let val: &usize = downcastRef(&storage[i])?;
         argsFfi.push(Arg::new(val));
       }
       Value::I8(_) => {
-        let val: &i8 = storage[i].downcast_ref::<i8>().unwrap();
+        let val: &i8 = downcastRef(&storage[i])?;
         argsFfi.push(Arg::new(val));
       }
       Value::I16(_) => {
-        let val: &i16 = storage[i].downcast_ref::<i16>().unwrap();
+        let val: &i16 = downcastRef(&storage[i])?;
         argsFfi.push(Arg::new(val));
       }
       Value::I32(_) => {
-        let val: &i32 = storage[i].downcast_ref::<i32>().unwrap();
+        let val: &i32 = downcastRef(&storage[i])?;
         argsFfi.push(Arg::new(val));
       }
       Value::I64(_) => {
-        let val: &i64 = storage[i].downcast_ref::<i64>().unwrap();
+        let val: &i64 = downcastRef(&storage[i])?;
         argsFfi.push(Arg::new(val));
       }
       Value::Isize(_) => {
-        let val: &isize = storage[i].downcast_ref::<isize>().unwrap();
+        let val: &isize = downcastRef(&storage[i])?;
         argsFfi.push(Arg::new(val));
       }
       Value::F32(_) => {
-        let val: &f32 = storage[i].downcast_ref::<f32>().unwrap();
+        let val: &f32 = downcastRef(&storage[i])?;
         argsFfi.push(Arg::new(val));
       }
       Value::F64(_) => {
-        let val: &f64 = storage[i].downcast_ref::<f64>().unwrap();
+        let val: &f64 = downcastRef(&storage[i])?;
         argsFfi.push(Arg::new(val));
       }
       Value::Bool(_) => {
-        let val: &u8 = storage[i].downcast_ref::<u8>().unwrap();
+        let val: &u8 = downcastRef(&storage[i])?;
         argsFfi.push(Arg::new(val));
       }
-      Value::ByteVector(_) => {
-        let (_, ptr): &(Vec<u8>, *mut c_void) = storage[i]
-          .downcast_ref::<(Vec<u8>, *mut c_void)>()
-          .unwrap();
+      Value::Pointer(_) => {
+        let ptr: &*mut c_void = storage[i].downcast_ref().unwrap();
         argsFfi.push(Arg::new(ptr));
       }
-      Value::None => return Err("Cannot pass None".to_string()),
+      Value::RawString(_) | Value::CString(_) => {
+        let (_, ptr): &(Vec<u8>, *mut c_void) = downcastRef(&storage[i])?;
+        argsFfi.push(Arg::new(ptr));
+      }
+      Value::String(_) => {
+        let (_, ptr, len): &(Vec<u8>, *mut c_void, usize) = downcastRef(&storage[i])?;
+        argsFfi.push(Arg::new(ptr));
+        argsFfi.push(Arg::new(len));
+      }
+      Value::None => return Err(FFIError::BadArgument("Cannot pass Value::None".to_string()))
     }
   }
 
@@ -270,29 +293,78 @@ fn invokeFFI(cif: &Cif, codePointer: CodePtr, argsFfi: &[Arg], ffiResultType: &T
       Value::Bool(val != 0)
     }
     Type::Pointer => 
-    { // For pointers, return None
-      // todo: not supported yet
-      Value::None
+    { 
+      let ptr: *mut c_void = unsafe { cif.call::<*mut c_void>(codePointer, argsFfi) };
+      Value::Pointer(ptr as usize)
     }
   }
 }
 
+// todo desc
+fn downcastRef<T: 'static>(entry: &Box<dyn Any>) -> Result<&T, FFIError>
+{
+  entry.downcast_ref::<T>()
+    .ok_or_else(|| FFIError::ArgumentDowncastFailed("FFI storage type mismatch".to_string()))
+}
+
 // =================================================================================================
 
-/// Executes inside the forked zygote worker, not the Zygote itself;
-/// performs `dlopen` of a specific library and calls the function through libffi;
-/// is called once per request, after which the worker terminates.
-pub fn executeFFI(request: FFIRequest, cache: &mut FxHashMap<String, Library>) -> Result<Value, String>
+// todo desc
+pub fn executeFFI(request: FFIRequest, cache: &mut FxHashMap<String, Library>) -> Result<Value, FFIError>
 {
-  // Check arguments for the presence of Value::None before building C ABI types
-  for (index, arg) in request.args.iter().enumerate() {
-    if matches!(arg, Value::None) {
-      return Err(format!("Cannot pass Value::None as argument at index {}", index));
+  match request
+  {
+    FFIRequest::Call { libraryPath, functionName, args, resultType } =>
+      executeCall(libraryPath, functionName, args, resultType, cache),
+
+    FFIRequest::Alloc { length } => unsafe {
+      let ptr: *mut c_void = libc::malloc(length);
+      if ptr.is_null() { return Err(FFIError::Other("malloc returned null".to_string())); }
+      Ok(Value::Pointer(ptr as usize))
+    },
+
+    FFIRequest::Free { pointer } => unsafe {
+      libc::free(pointer as *mut c_void);
+      Ok(Value::None)
+    }
+
+    FFIRequest::ReadMemory { pointer, length } => unsafe {
+      if pointer == 0 { return Err(FFIError::BadArgument("null pointer".to_string())); }
+      let slice: &[u8] = std::slice::from_raw_parts(pointer as *const u8, length);
+      Ok(Value::RawString(slice.to_vec()))
+    },
+
+    FFIRequest::WriteMemory { pointer, value } => unsafe {
+      if pointer == 0 { return Err(FFIError::BadArgument("null pointer".to_string())); }
+      let bytes: &[u8] = match &value {
+        Value::RawString(v) | Value::CString(v) => v.as_slice(),
+        _ => return Err(FFIError::BadArgument("expected RawString or CString for WriteMemory".to_string())),
+      };
+      std::ptr::copy_nonoverlapping(bytes.as_ptr(), pointer as *mut u8, bytes.len());
+      Ok(Value::None)
     }
   }
-  
-  //
-  let FFIRequest{ libraryPath, functionName, args, resultType: ffiResultType } = request;
+}
+
+/// Executes inside the forked zygote worker, not the Zygote itself;
+/// 
+/// performs `dlopen` of a specific library and calls the function through libffi;
+/// 
+/// is called once per request, after which the worker terminates.
+pub fn executeCall(
+  libraryPath: String,
+  functionName: String,
+  args: Vec<Value>,
+  ffiResultType: Type,
+  cache: &mut FxHashMap<String, Library>
+) -> Result<Value, FFIError>
+{
+  // Check arguments for the presence of Value::None before building C ABI types
+  for (index, arg) in args.iter().enumerate() {
+    if matches!(arg, Value::None) {
+      return Err(FFIError::BadArgument(format!("Cannot pass Value::None as argument at index {}", index)));
+    }
+  }
 
   // This code is executed in a clone of the main zygote;
   // All resources will be automatically released when the process terminates.
@@ -301,7 +373,7 @@ pub fn executeFFI(request: FFIRequest, cache: &mut FxHashMap<String, Library>) -
   if !cache.contains_key(&libraryPath) {
     let lib: Library = unsafe {
       Library::new(&libraryPath)
-        .map_err(|e| format!("Failed to load library: {}", e))?
+        .map_err(|e| FFIError::LibraryLoadFailed { libraryPath: libraryPath.clone(), message: e.to_string() })?
     };
     cache.insert(libraryPath.clone(), lib);
   }
@@ -311,14 +383,14 @@ pub fn executeFFI(request: FFIRequest, cache: &mut FxHashMap<String, Library>) -
   let functionPointer: *mut c_void = unsafe {
     *library
       .get::<*mut c_void>(functionName.as_bytes())
-      .map_err(|e| format!("Failed to find function: {}", e))?
+      .map_err(|_| FFIError::SymbolNotFound { functionName: functionName.clone() })?
   };
 
   // Build argument types for CIF
-  let argsTypes: Vec<libffi::middle::Type> = args
-    .iter()
-    .map(libffi::middle::Type::try_from)
-    .collect::<Result<Vec<_>, _>>()?;
+  let mut argsTypes: Vec<libffi::middle::Type> = Vec::new();
+  for arg in &args {
+    argsTypes.extend(toCifTypes(arg)?);
+  }
 
   let returnType: libffi::middle::Type = libffi::middle::Type::from(&ffiResultType);
 

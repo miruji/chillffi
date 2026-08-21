@@ -1,3 +1,5 @@
+use std::cell::RefMut;
+use crate::ffi::errors::FFIError;
 use fxhash::FxHashMap;
 use std::sync::MutexGuard;
 use crate::zygote::ClonedZygote;
@@ -6,44 +8,6 @@ use crate::ffi::value::{Type, Value};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use crate::zygote::{FFIRequest, FFIResponse, ZygoteStack};
-// =================================================================================================
-
-/// Errors occurring during library loading and call execution
-/// 
-/// todo Тут нет описания каждой ошибки, что может быть полезно.
-#[derive(Debug)]
-pub enum FFIError
-{
-  ZygoteNotInitialized,
-  NoActiveZygoteScope,
-  ZygoteCommunicationFailed(String),
-  //LibraryLoadFailed(String),
-  LibraryNotFound{ libraryPath: String },
-  //SymbolNotFound,
-  //BadArgument,
-  //BadResultType,
-  CallFailed{ functionName: String, message: String },
-  //UnsupportedPointerReturn,
-  //EncodeFailed,
-  //DecodeFailed,
-  Other(String)
-}
-
-impl std::fmt::Display for FFIError
-{
-  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result
-  {
-    write!(f, "{:?}", self)
-  }
-}
-
-impl<E: std::error::Error + 'static> From<E> for FFIError
-{
-  fn from(err: E) -> Self {
-    Self::Other(err.to_string())
-  }
-}
-
 // =================================================================================================
 
 /// Counter for assigning unique identifiers to libraries
@@ -63,18 +27,54 @@ fn getRegistry() -> &'static Mutex<FxHashMap<usize, String>>
   RegisteredLibraries.get_or_init(|| Mutex::new(FxHashMap::default()))
 }
 
+/// todo desc
+fn lockRegistry() -> MutexGuard<'static, FxHashMap<usize, String>>
+{
+  getRegistry().lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// Adds a library to the registry by its identifier
 fn registerLibrary(id: usize, path: &str) -> ()
 {
-  let mut registry: MutexGuard<FxHashMap<usize, String>> = getRegistry().lock().unwrap();
+  let mut registry: MutexGuard<FxHashMap<usize, String>> = lockRegistry();
   registry.insert(id, path.to_string());
 }
 
 /// Removes a library from the registry by its identifier
 fn unregisterLibrary(id: usize) -> ()
 {
-  let mut registry: MutexGuard<FxHashMap<usize, String>> = getRegistry().lock().unwrap();
+  let mut registry: MutexGuard<FxHashMap<usize, String>> = lockRegistry();
   registry.remove(&id);
+}
+
+// =================================================================================================
+
+// todo desc
+pub(super) fn sendRawRequest(request: FFIRequest) -> Result<Value, FFIError>
+{
+  // Check whether the global zygote in ZygoteState has been initialized
+  if ZygoteState.get().is_none() { 
+    // todo У callById это будет повторная проверка. 
+    //  Но в callById лучше сразу его проверять
+    return Err(FFIError::ZygoteNotInitialized);
+  }
+  
+  // Search for the active clone in the local stack of the current thread
+  ZygoteStack.with(|stack| {
+    let mut mutStack: RefMut<Vec<ClonedZygote>> = stack.borrow_mut();
+
+    // If the stack is empty — it means the call is being made outside the context of ffi!{}
+    let zygote: &mut ClonedZygote = mutStack
+      .last_mut()
+      .ok_or(FFIError::NoActiveZygoteScope)?;
+
+    // Execute the FFI request through the current zygote
+    match zygote.call(request) {
+      Ok(FFIResponse::Ok(val)) => Ok(val),
+      Ok(FFIResponse::Err(err)) => Err(err),
+      Err(err) => Err(FFIError::ZygoteCommunicationFailed(err))
+    }
+  })
 }
 
 /// Performs an FFI function call 
@@ -93,38 +93,14 @@ fn callById(
   }
 
   // Retrieve the path to the `.so` from the registry and construct an FFIRequest
-  let registry: MutexGuard<FxHashMap<usize, String>> = getRegistry().lock().unwrap();
+  let registry: MutexGuard<FxHashMap<usize, String>> = lockRegistry();
   if !registry.contains_key(&libraryId) {
      return Err(FFIError::LibraryNotFound{ libraryPath: libraryPath.to_string() });
   }
-  
   drop(registry);
-
-  let request: FFIRequest = FFIRequest {
-    libraryPath: libraryPath.to_string(),
-    functionName: functionName.to_string(),
-    args,
-    resultType,
-  };
-
-  // Search for the active clone in the local stack of the current thread
-  ZygoteStack.with(|stack| {
-    let mut mutStack = stack.borrow_mut();
-
-    // If the stack is empty — it means the call is being made outside the context of ffi!{}
-    let zygote: &mut ClonedZygote = mutStack
-      .last_mut()
-      .ok_or(FFIError::NoActiveZygoteScope)?;
-
-    // Execute the FFI request through the current zygote
-    match zygote.call(request) {
-      Ok(FFIResponse::Ok(val)) => Ok(val),
-      Ok(FFIResponse::Err(err)) => Err(FFIError::CallFailed{ 
-        functionName: functionName.to_string(), 
-        message: err 
-      }),
-      Err(err) => Err(FFIError::ZygoteCommunicationFailed(err)),
-    }
+  
+  sendRawRequest(FFIRequest::Call {
+    libraryPath: libraryPath.to_string(), functionName: functionName.to_string(), args, resultType,
   })
 }
 
@@ -136,7 +112,7 @@ pub struct __Library<const Allowed: bool = false>
 {
   /// Library identifier
   libraryId: usize,
-  /// Путь к загруженной библиотеке
+  /// Path to the loaded library
   libraryPath: String
 }
 
@@ -172,6 +148,15 @@ impl __Library<true>
     callById(self.libraryId, &self.libraryPath, functionName, args, resultType)
   }
 
+  /// Loads the library and registers it for further calls
+  pub fn load(libraryPath: &str) -> Result<Self, FFIError>
+  {
+    let libraryId: usize = nextLibraryId();
+    let ownedPath: String = String::from(libraryPath);
+    registerLibrary(libraryId, &ownedPath);
+    Ok(Self{ libraryId, libraryPath: ownedPath })
+  }
+  
   /// Unloads the library and removes it from the registry;
   ///
   /// Here self instead of &self is used so that after removal it is not possible
@@ -182,15 +167,6 @@ impl __Library<true>
     // and the Drop implementation will be triggered, 
     // which will call unregisterLibrary() itself.
     Ok(())
-  }
-
-  /// Loads the library and registers it for further calls
-  pub fn load(libraryPath: &str) -> Result<Self, FFIError>
-  {
-    let libraryId: usize = nextLibraryId();
-    let ownedPath: String = String::from(libraryPath);
-    registerLibrary(libraryId, &ownedPath);
-    Ok(Self{ libraryId, libraryPath: ownedPath })
   }
 }
 
@@ -206,9 +182,8 @@ pub type __FFILibrary = __Library<true>;
 #[cfg(test)]
 mod tests
 {
-  use crate::tests::setup;
   use crate::ffi;
-  use crate::ffi::library::getRegistry;
+  use crate::ffi::library::lockRegistry;
   use crate::ffi::value::Value;
   use crate::ffi::value::Type;
   // ===============================================================================================
@@ -217,8 +192,6 @@ mod tests
   #[test]
   fn libraryDrop() -> ()
   {
-    setup();
-
     let id: usize = ffi!{
       let libm: Library = Library::load("libm.so.6")?;
       let id: usize = libm.id();
@@ -226,7 +199,7 @@ mod tests
       Ok(id)
     }.expect("ffi block failed");
 
-    assert!(!getRegistry().lock().unwrap().contains_key(&id));
+    assert!(!lockRegistry().contains_key(&id));
   }
 
   /// Checks that library is removed from registry 
@@ -234,15 +207,13 @@ mod tests
   #[test]
   fn libraryAutoDrop() -> ()
   {
-    setup();
-
     let id: usize = ffi!{
       let libm: Library = Library::load("libm.so.6")?;
       let id: usize = libm.id();
       Ok(id)
     }.expect("ffi block failed");
 
-    assert!(!getRegistry().lock().unwrap().contains_key(&id));
+    assert!(!lockRegistry().contains_key(&id));
   }
 
   /// Checks that library is removed from registry 
@@ -250,8 +221,6 @@ mod tests
   #[test]
   fn libraryUnload() -> ()
   {
-    setup();
-
     let id: usize = ffi!{
       let libm: Library = Library::load("libm.so.6")?;
       let id: usize = libm.id();
@@ -259,7 +228,7 @@ mod tests
       Ok(id)
     }.expect("ffi block failed");
 
-    assert!(!getRegistry().lock().unwrap().contains_key(&id));
+    assert!(!lockRegistry().contains_key(&id));
   }
 
   // ===============================================================================================
@@ -268,13 +237,11 @@ mod tests
   #[test]
   fn sqrt() -> ()
   {
-    setup();
-
     let result: Value = ffi!{
-    let libm: Library = Library::load("libm.so.6")?;
-    let args: Vec<Value> = vec![Value::F64(4.0)];
-    Ok(libm.call("sqrt", args, Type::F64)?)
-  }.expect("FFI call failed");
+      let libm: Library = Library::load("libm.so.6")?;
+      let args: Vec<Value> = vec![Value::F64(4.0)];
+      Ok(libm.call("sqrt", args, Type::F64)?)
+    }.expect("FFI call failed");
 
     if let Value::F64(val) = result {
       assert!((val - 2.0).abs() < f64::EPSILON);
@@ -287,13 +254,11 @@ mod tests
   #[test]
   fn abs() -> ()
   {
-    setup();
-
     let result: Value = ffi!{
-    let libm: Library = Library::load("libm.so.6")?;
-    let args: Vec<Value> = vec![Value::I32(-5)];
-    Ok(libm.call("abs", args, Type::I32)?)
-  }.expect("FFI call failed");
+      let libm: Library = Library::load("libm.so.6")?;
+      let args: Vec<Value> = vec![Value::I32(-5)];
+      Ok(libm.call("abs", args, Type::I32)?)
+    }.expect("FFI call failed");
 
     if let Value::I32(val) = result {
       assert_eq!(val, 5);
@@ -308,23 +273,21 @@ mod tests
   #[test]
   fn multipleCallsInSingleLibrary() -> ()
   {
-    setup();
-
     let results: Vec<Value> = ffi!{
-    let libm: Library = Library::load("libm.so.6")?;
-    let mut outputs: Vec<Value> = Vec::with_capacity(10);
-
-    // 10 consecutive libm.call() calls with a single loaded library
-    for i in 1..=10 
-    {
-      let input: f64 = (i * i) as f64;
-      let args: Vec<Value> = vec![Value::F64(input)];
-      let res: Value = libm.call("sqrt", args, Type::F64)?;
-      outputs.push(res);
-    }
-
-    Ok(outputs)
-  }.expect("Batch FFI call failed");
+      let mut outputs: Vec<Value> = Vec::with_capacity(10);
+      let libm: Library = Library::load("libm.so.6")?;
+  
+      // 10 consecutive libm.call() calls with a single loaded library
+      for i in 1..=10 
+      {
+        let input: f64 = (i * i) as f64;
+        let args: Vec<Value> = vec![Value::F64(input)];
+        let res: Value = libm.call("sqrt", args, Type::F64)?;
+        outputs.push(res);
+      }
+  
+      Ok(outputs)
+    }.expect("Batch FFI call failed");
 
     assert_eq!(results.len(), 10);
 
@@ -343,20 +306,18 @@ mod tests
 
   /// Checks passing Value::None as an argument - should return an error.
   #[test]
-  fn testNoneArgumentFails() -> ()
+  fn noneArgumentFails() -> ()
   {
-    setup();
-
     let result: Result<Value, _> = ffi!{
-    let libm: Library = Library::load("libm.so.6")?;
-    let args: Vec<Value> = vec![Value::None];
-    let res: Value = libm.call("sqrt", args, Type::F64)?;
-    Ok(res)
-  };
+      let libm: Library = Library::load("libm.so.6")?;
+      let args: Vec<Value> = vec![Value::None];
+      let res: Value = libm.call("sqrt", args, Type::F64)?;
+      Ok(res)
+    };
 
     assert!(result.is_err(), "FFI call with Value::None should fail");
   }
-  
+
   // ===============================================================================================
 }
 
