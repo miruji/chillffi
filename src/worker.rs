@@ -8,12 +8,13 @@ use crate::zygote;
 use crate::zygote::{FFIRequest, FFIResponse};
 // =================================================================================================
 
-/// Формирует запрос и отправляет его Зиготе;
-/// сама эта функция ничего не форкает и не грузит — только сериализация и IPC;
+/// Forms a request and sends it to the Zygote;
+/// this function itself does not fork or load anything — only serialization and IPC;
 ///
-/// Принимает путь к библиотеке, имя функции, аргументы в виде токенов и ожидаемый тип результата;
+/// Accepts the path to the library, the function name, 
+/// arguments as tokens, and the expected result type;
 ///
-/// Возвращает результат как FFIValue или ошибку.
+/// Returns the result as FFIValue or an error.
 pub fn callExternal(
   libraryPath: &str,
   methodName: &str,
@@ -21,28 +22,30 @@ pub fn callExternal(
   resultType: Type,
 ) -> Result<Value, String>
 {
-  // Собираем запрос и отправляем Зиготе
+  // Build the request
   let request: FFIRequest = FFIRequest {
-    libraryPath:  libraryPath.to_string(),
+    libraryPath: libraryPath.to_string(),
     functionName: methodName.to_string(),
     args,
     resultType,
   };
 
+  // Send it to the cloned zygote
   match zygote::call(request)?
   {
     FFIResponse::Ok(value) => Ok(value),
-    FFIResponse::Err(e)    => Err(e),
+    FFIResponse::Err(e) => Err(e),
   }
 }
 
 // =================================================================================================
 
-impl TryFrom<&Value> for libffi::middle::Type {
+impl TryFrom<&Value> for libffi::middle::Type 
+{
   type Error = String;
 
-  /// Определяет тип аргумента для C-функции 
-  /// и сразу отсекает None, который нельзя передать.
+  /// Determines the argument type for the C function
+  /// and immediately filters out None, which cannot be passed.
   fn try_from(val: &Value) -> Result<Self, Self::Error> 
   {
     match val 
@@ -68,8 +71,8 @@ impl TryFrom<&Value> for libffi::middle::Type {
 
 impl From<&Type> for libffi::middle::Type 
 {
-  /// Задает тип возвращаемого значения, чтобы libffi знала, 
-  /// сколько байт читать после вызова.
+  /// Specifies the return value type so that libffi knows
+  /// how many bytes to read after the call.
   fn from(t: &Type) -> Self 
   {
     match t 
@@ -93,16 +96,16 @@ impl From<&Type> for libffi::middle::Type
   }
 }
 
-/// Удерживает аргументы в буфере storage, 
-/// чтобы они не удалились из памяти во время C-вызова, 
-/// и собирает на них указатели.
+/// Keeps the arguments in the storage buffer,
+/// so that they are not removed from memory during the C call,
+/// and collects pointers to them.
 fn prepareFFIArgs<'a>(
   args: &'a [Value],
   storage: &'a mut Vec<Box<dyn Any>>,
 ) -> Result<Vec<Arg<'a>>, String> 
 {
-  // Подготавливаем хранилище для значений, 
-  // на которые будут ссылаться аргументы.
+  // Prepare storage for the values
+  // that the arguments will reference.
   for arg in args 
   {
     match arg 
@@ -120,10 +123,11 @@ fn prepareFFIArgs<'a>(
       Value::F32(v) => storage.push(Box::new(*v)),
       Value::F64(v) => storage.push(Box::new(*v)),
       Value::Bool(b) => storage.push(Box::new(if *b { 1u8 } else { 0u8 })),
-      Value::ByteVector(v) => {
-        // Для байтового вектора передаём указатель на данные;
-        // Важно: Если C-коду надо будет его на долгое время - это его забота.
-        // Указатель будет удален нами, потому что он временный + работа процесса зиготы.
+      Value::ByteVector(v) => 
+      { // For a byte vector, pass a pointer to the data;
+        // Important: If the C code needs it for a long time, it is its responsibility.
+        // The pointer will be removed by us because it is temporary 
+        // + due to the zygote process operation.
         let mut vec: Vec<u8> = v.clone();
         let pointer: *mut c_void = vec.as_mut_ptr() as *mut c_void;
         storage.push(Box::new((vec, pointer)));
@@ -132,7 +136,7 @@ fn prepareFFIArgs<'a>(
     }
   }
 
-  // Строим список аргументов для libffi
+  // Build the list of arguments for libffi
   let mut argsFfi: Vec<Arg<'a>> = Vec::with_capacity(args.len());
   for (i, arg) in args.iter().enumerate() 
   {
@@ -203,8 +207,8 @@ fn prepareFFIArgs<'a>(
   Ok(argsFfi)
 }
 
-/// Вызывает C-функцию по указателю 
-/// и оборачивает полученный сырой результат обратно в enum Value.
+/// Calls the C function by pointer
+/// and wraps the obtained raw result back into the Value enum.
 fn invokeFFI(cif: &Cif, codePointer: CodePtr, argsFfi: &[Arg], ffiResultType: &Type) -> Value 
 {
   match ffiResultType 
@@ -265,8 +269,9 @@ fn invokeFFI(cif: &Cif, codePointer: CodePtr, argsFfi: &[Arg], ffiResultType: &T
       let val: u8 = unsafe { cif.call::<u8>(codePointer, argsFfi) };
       Value::Bool(val != 0)
     }
-    Type::Pointer => {
-      // Для указателей возвращаем None todo пока не поддерживаем
+    Type::Pointer => 
+    { // For pointers, return None
+      // todo: not supported yet
       Value::None
     }
   }
@@ -274,12 +279,12 @@ fn invokeFFI(cif: &Cif, codePointer: CodePtr, argsFfi: &[Arg], ffiResultType: &T
 
 // =================================================================================================
 
-/// Выполняется ВНУТРИ форкнутого Зиготой воркера, не самой Зиготой;
-/// делает dlopen конкретной библиотеки и вызывает функцию через libffi;
-/// вызывается один раз на запрос, после чего воркер завершается.
+/// Executes inside the forked zygote worker, not the Zygote itself;
+/// performs `dlopen` of a specific library and calls the function through libffi;
+/// is called once per request, after which the worker terminates.
 pub fn executeFFI(request: FFIRequest, cache: &mut FxHashMap<String, Library>) -> Result<Value, String>
 {
-  // 1. Проверяем аргументы на наличие Value::None до сборки типов C ABI
+  // Check arguments for the presence of Value::None before building C ABI types
   for (index, arg) in request.args.iter().enumerate() {
     if matches!(arg, Value::None) {
       return Err(format!("Cannot pass Value::None as argument at index {}", index));
@@ -289,10 +294,10 @@ pub fn executeFFI(request: FFIRequest, cache: &mut FxHashMap<String, Library>) -
   //
   let FFIRequest{ libraryPath, functionName, args, resultType: ffiResultType } = request;
 
-  // Этот код выполняется в клоне от основной зиготы;
-  // Все ресурсы будут автоматически освобождены при завершении процесса.
+  // This code is executed in a clone of the main zygote;
+  // All resources will be automatically released when the process terminates.
 
-  // Достаём библиотеку из кеша или загружаем с диска при первом вызове
+  // Retrieve the library from the cache or load it from disk on the first call
   if !cache.contains_key(&libraryPath) {
     let lib: Library = unsafe {
       Library::new(&libraryPath)
@@ -302,14 +307,14 @@ pub fn executeFFI(request: FFIRequest, cache: &mut FxHashMap<String, Library>) -
   }
   let library: &Library = cache.get(&libraryPath).unwrap();
 
-  // Получаем указатель на функцию
+  // Get the function pointer
   let functionPointer: *mut c_void = unsafe {
     *library
       .get::<*mut c_void>(functionName.as_bytes())
       .map_err(|e| format!("Failed to find function: {}", e))?
   };
 
-  // Строим типы аргументов для CIF
+  // Build argument types for CIF
   let argsTypes: Vec<libffi::middle::Type> = args
     .iter()
     .map(libffi::middle::Type::try_from)
@@ -319,16 +324,17 @@ pub fn executeFFI(request: FFIRequest, cache: &mut FxHashMap<String, Library>) -
 
   let cif: Cif = Cif::new(argsTypes, returnType);
 
-  // Подготавливаем хранилище для значений, на которые будут ссылаться аргументы
+  // Prepare storage for the values that the arguments will reference
   let mut storage: Vec<Box<dyn Any>> = Vec::with_capacity(args.len());
 
-  // Строим список аргументов для libffi
+  // Build the list of arguments for libffi
   let argsFfi: Vec<Arg> = prepareFFIArgs(&args, &mut storage)?;
 
-  // Вызов функции
+  // Function call
   let codePointer: CodePtr = CodePtr(functionPointer);
   let ffiResult: Value = invokeFFI(&cif, codePointer, &argsFfi, &ffiResultType);
 
+  //
   Ok(ffiResult)
 }
 

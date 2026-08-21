@@ -3,34 +3,90 @@ name = "chillffi"
 version = "0.1.0"
 edition = "2024"
 
+#
+authors = ["miruji <miruji@protonmail.com>"]
+description = "A simple isolated dynamic FFI framework for Rust"
+license-file = "LICENCE.md" # FCL
+readme = "README.md"
+
+# ======================================================================================================================
+
+#repository = "https://github.com/username/chillffi"
+#keywords = ["ffi", "zygote", "ipc", "sandbox", "fork"]
+#categories = ["external-ffi-bindings", "os::unix-apis", "c-bindings", "api-bindings"]
+publish = false
+
+#documentation = "https://docs.rs/chillffi"
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
+
+include = [
+  "src/**/*",
+  "examples/**/*", # Examples remain for convenience
+  "Cargo.toml",
+  "README.md",
+  "LICENSE.md",
+]
+
+# ======================================================================================================================
+
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+
+# ======================================================================================================================
+
+# Building as a cdylib is not provided. Works only in Rust.
+
+# ======================================================================================================================
+
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = "fat"
+panic = "abort"
+strip = "symbols"
+overflow-checks = false
+debug  = false
+incremental = false
+rpath = false
+
+[profile.dev]
+opt-level = 0
+debug = true
+overflow-checks = true
+lto = false
+incremental = true
+
 # ======================================================================================================================
 
 [dependencies]
 bincode = { version = "2.0.1", features = ["serde"] }
-# Используется для FFI; (3.0 если что - нет).
+# Used for FFI; (3.0 if anything - no).
 
 libloading = { version = "0.9.0" }
-# Используется для динамической загрузки библиотек (libraryPath) 
-# и получения указателей на функции (methodName), которые затем вызываются.
+# Used for dynamic library loading (libraryPath)
+# and obtaining pointers to functions (methodName), which are then called.
 
-libffi = { version = "5.1.1" }
-# Предоставляет динамический вызов C-функций с произвольной сигнатурой 
-# (количество и типы аргументов, тип возврата) во время выполнения. 
-# В отличие от статически зашитых обёрток, libffi позволяет конструировать 
-# вызов на лету на основе описания типов, что хорошо для FFI.
+libffi = { version = "5.2.0" }
+# Provides dynamic calling of C functions with arbitrary signatures
+# (number and types of arguments, return type) at runtime.
+# Unlike statically hardcoded wrappers, libffi allows constructing
+# a call on the fly based on a type description, which is good for FFI.
 
-libc = { version = "1.0.0-alpha.3" }
-# Предоставляет системные вызовы dup2/dup для временного 
-# перенаправления stdout → stderr, изолируя вывод библиотеки от служебного канала.
+libc = { version = "1.0.0-alpha.4" }
+# Provides the dup2/dup system calls for temporary
+# redirection of stdout → stderr, isolating the library output from the service channel.
 
-serde = { version = "1.0.228", features = ["derive"] }
-# Сериализация и десериализация структур запросов и ответов
+serde = { version = "1.0.229", features = ["derive"] }
+# Serialization and deserialization of request and response structures
 
 ctor = "1.0.13"
-# Выполнение функций при старте процесса для автоматической инициализации
+# Execution of functions at process startup for automatic initialization
 
 fxhash = "0.2.1"
-# Быстрый HashMap без дополнительной защиты от атак на хеширование
+# Fast HashMap without additional protection against hash attacks
 
 # ======================================================================================================================
 
@@ -41,7 +97,7 @@ non_camel_case_types = "allow"
 
 # ======================================================================================================================
 
-# Примеры работы:
+# Usage examples:
 # cargo run --example simple
 
 [[example]]
@@ -50,18 +106,18 @@ path = "examples/simple.rs"
 
 # ======================================================================================================================
 
-# Тестирование:
+# Testing:
 # cargo test
 
 # ======================================================================================================================
 
-# Отладка clippy:
+# Clippy debugging:
 # cargo clippy
 
 [lints.clippy]
 unused_unit = "allow"
 option_if_let_else = "allow"
 collapsible_if = "allow"
-nursery = { level = "warn", priority = -1 } # В самом низу
+nursery = { level = "warn", priority = -1 } # At the very bottom
 
 # ======================================================================================================================

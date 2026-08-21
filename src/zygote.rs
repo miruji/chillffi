@@ -48,24 +48,25 @@ use crate::worker::executeFFI;
 
 // =================================================================================================
 
-/// Скрытый флаг запуска: если он первый аргумент — это не runtime, а процесс-Зигота.
+/// Hidden startup flag: if it is the first argument — 
+/// this is not the runtime, but the zygote process.
 pub const ZygoteFlag: &str = "__zygote";
 
-/// Запрос на выполнение FFI, уходящий в Зиготу целиком
+/// Request for FFI execution, sent entirely to the zygote
 #[derive(Serialize, Deserialize)]
 pub struct FFIRequest
 {
-  /// Путь к библиотеке, в которой находится вызываемая функция
+  /// Path to the library containing the called function
   pub libraryPath: String,
-  /// Имя функции для вызова в загруженной библиотеке
+  /// Function name to call in the loaded library
   pub functionName: String,
-  /// Аргументы, передаваемые в функцию
+  /// Arguments passed to the function
   pub args: Vec<Value>,
-  /// Ожидаемый тип возвращаемого значения
+  /// Expected return value type
   pub resultType: Type
 }
 
-/// Ответ на запрос с результатом выполнения или ошибкой
+/// Response to the request with the execution result or error
 #[derive(Serialize, Deserialize)]
 pub enum FFIResponse
 {
@@ -73,54 +74,56 @@ pub enum FFIResponse
   Err(String)
 }
 
-/// Управляет процессом зиготы и каналом связи с ним
+/// Controls the zygote process and 
+/// the communication channel with it.
 pub(super) struct ZygoteHandle
 {
-  /// Дочерний процесс зиготы
+  /// Child zygote process
   process: Child,
-  /// Сокет для обмена запросами и ответами с процессом
+  /// Socket for exchanging requests 
+  /// and responses with the process.
   pub(super) socket: UnixStream
 }
 
 impl Drop for ZygoteHandle
 {
-  /// Завершает процесс зиготы и удаляет временный сокет
+  /// Terminates the zygote process and removes the temporary socket
   fn drop(&mut self) -> ()
   {
     let _ = self.process.kill();
   }
 }
 
-/// Глобальное состояние активной зиготы с синхронизацией доступа
+/// Global state of the active zygote with synchronized access
 pub(super) static ZygoteState: OnceLock<Mutex<ZygoteHandle>> = OnceLock::new();
 
 // =================================================================================================
 
-/// RAII-хэндл для отдельного процесса-клона зиготы
+/// RAII handle for a separate zygote clone process
 pub struct ClonedZygote 
 {
-  /// PID процесса
+  /// Process PID
   pub pid: libc::pid_t,
-  /// Сокет для обмена запросами
-  pub socket: UnixStream,
+  /// Socket for exchanging requests
+  pub socket: UnixStream
 }
 
 impl ClonedZygote 
 {
-  /// Запрашивает клон у Главной Зиготы и возвращает его RAII-хэндл
+  /// Requests a clone from the main zygote and returns its RAII handle
   pub fn getMeClone() -> io::Result<Self>
   {
     let mutex: &Mutex<ZygoteHandle> = ZygoteState.get().expect("Zygote not initialized");
     let mut guard: MutexGuard<ZygoteHandle> = mutex.lock().unwrap();
 
-    // Отправляем сигнал на создание клона
+    // Sends a signal to create a clone
     writeMessage(&mut guard.socket, &[1u8])?;
 
-    // Получаем PID клона
+    // Receives the clone PID
     let pidBytes: Vec<u8> = readMessage(&mut guard.socket)?;
     let pid: i32 = i32::from_le_bytes(pidBytes.try_into().unwrap());
 
-    // Читаем дескриптор сокета напрямую из RAM
+    // Read the socket descriptor directly from RAM
     let fd: RawFd = recvFd(&mut guard.socket)?;
     let socket: UnixStream = unsafe { UnixStream::from_raw_fd(fd) };
 
@@ -128,7 +131,7 @@ impl ClonedZygote
     Ok(Self { pid, socket })
   }
 
-  /// Вызов FFI внутри конкретного клона
+  /// FFI call inside a specific clone
   pub fn call(&mut self, request: FFIRequest) -> Result<FFIResponse, String>
   {
     let bytes: Vec<u8> = encode(&request);
@@ -139,7 +142,8 @@ impl ClonedZygote
 
 impl Drop for ClonedZygote 
 {
-  /// При drop() клон моментально убивается, Главная Зигота не затрагивается
+  /// When drop() is called, the clone is immediately killed, 
+  /// the main zygote is not affected.
   fn drop(&mut self) -> ()
   {
     unsafe {
@@ -151,16 +155,16 @@ impl Drop for ClonedZygote
 // =================================================================================================
 
 thread_local!{
-  /// Стек зигот: каждый вход в ffi!{} кладет новую зиготу наверх стека
+  /// Zygote stack: each entry into ffi!{} puts a new zygote on top of the stack.
   pub(crate) static ZygoteStack: RefCell<Vec<ClonedZygote>> = const { RefCell::new(Vec::new()) };
 }
 
-/// RAII-охранник активной зиготы в стеке текущего потока.
+/// RAII guard of the active zygote in the current thread's stack.
 pub struct ZygoteGuard;
 
 impl ZygoteGuard 
 {
-  /// Добавляет зиготу в стек и возвращает охранник её времени жизни.
+  /// Adds a zygote to the stack and returns a guard for its lifetime.
   pub fn enter(zygote: ClonedZygote) -> Self 
   {
     ZygoteStack.with(|stack| {
@@ -172,8 +176,8 @@ impl ZygoteGuard
 
 impl Drop for ZygoteGuard 
 {
-  /// Снимаем со стека именно эту зиготу,
-  /// и Rust автоматически вызывает её drop(), убивая процесс.
+  /// Removes exactly this zygote from the stack,
+  /// and Rust automatically calls its drop(), killing the process.
   fn drop(&mut self) -> ()
   {
     ZygoteStack.with(|stack| {
@@ -184,19 +188,19 @@ impl Drop for ZygoteGuard
 
 // =================================================================================================
 
-/// Точка входа дочернего процесса-Зиготы;
-/// main() обязан вызвать это первой строкой, если первый аргумент == ZygoteFlag;
-/// Процесс порождён через Command (fork+exec) — runtime не прогревался,
-/// Лишних задач нет, кучи метаданных нет. Библиотеку заранее НЕ грузит.
+/// Entry point of the child Zygote process;
+/// main() must call this as the first line if the first argument == ZygoteFlag;
+/// The process is spawned through Command (fork+exec) — runtime was not warmed up,
+/// there are no extra tasks, there is no metadata heap. The library is not loaded in advance.
 pub (super) fn runAsZygote() -> !
 {
-  // Забираем сокет прямо из STDIN
+  // Take the socket directly from STDIN
   let socket: UnixStream = unsafe { UnixStream::from_raw_fd(libc::STDIN_FILENO) };
   zygoteLoop(socket);
 }
 
-/// Инициализация Зиготы; вызывать один раз, самой первой строкой обычного main(),
-/// до args-парсинга, до чтения файла, до parseLines/readTokens.
+/// Zygote initialization; call once, 
+/// as the very first line of the normal main().
 pub(super) fn initZygote() -> io::Result<()>
 {
   let handle: ZygoteHandle = spawnZygote()?;
@@ -206,15 +210,17 @@ pub(super) fn initZygote() -> io::Result<()>
   Ok(())
 }
 
-/// Зигота порождается ТОЛЬКО через Command (fork+exec) — и при старте, и при пересоздании.
-/// Это принципиально: обычный fork() пересоздания из уже прогретого многопоточного runtime
-/// (супервизор — отдельный поток) унаследовал бы чужие мьютексы в захваченном состоянии —
-/// та самая дедлок-ловушка из твоего разбора. exec() полностью заменяет образ процесса,
-/// поэтому Зигота всегда рождается чистой, независимо от того, насколько "толстым"
-/// успел стать runtime к моменту respawn'а.
+/// The zygote is spawned only through Command (fork+exec) at startup.
+/// This is fundamental: a regular fork() from an already warmed-up multithreaded runtime
+/// (the supervisor is a separate thread) would inherit other mutexes in a locked state —
+/// which would create a deadlock trap.
+///
+/// exec() completely replaces the process image,
+/// therefore the Zygote is always born clean, regardless of how "heavy"
+/// the runtime has become by the time of respawn.
 pub(super) fn spawnZygote() -> io::Result<ZygoteHandle>
 {
-  // Создаем парный сокет прямо в RAM без участия файловой системы
+  // Creates a socket pair directly in RAM without filesystem involvement
   let (runtimeSocket, zygoteSocket): (UnixStream, UnixStream) = UnixStream::pair()?;
   
   //
@@ -227,26 +233,32 @@ pub(super) fn spawnZygote() -> io::Result<ZygoteHandle>
   Ok(ZygoteHandle{ process, socket: runtimeSocket })
 }
 
-/// Цикл главной зиготы: бесконечный цикл ожидания команд.
-/// Библиотеку заранее НЕ грузит — язык интерпретируемый, какой FFI понадобится, неизвестно
-/// заранее. Зигота — пустой рантайм-шаблон; dlopen делает только форкнутый зигота.
+/// Main zygote loop: an infinite command waiting loop.
+/// Which FFI will be needed is unknown in advance.
+///
+/// The zygote is an empty runtime template; 
+/// dlopen only works with the forked zygote.
 fn zygoteLoop(mut socket: UnixStream) -> !
 {
-  // Важно: Игнорирование SIGCHLD нужно только в главной Зиготе.
-  // Это заставляет ядро ОС автоматически очищать её клоны при завершении (без зомби).
-  // В main runtime это писать нельзя: там waitpid в supervisorLoop() отслеживает сам процесс Зиготы,
-  // и при SIG_IGN он упадет с ECHILD и уйдет в гарантированную нагрузку CPU.
+  // Important: Ignoring SIGCHLD is needed only in the main Zygote.
+  //
+  // This makes the OS kernel automatically clean up 
+  // its clones on termination (without zombies).
+  //
+  // This must not be written in the main runtime: there, waitpid 
+  // in supervisorLoop() tracks the Zygote process itself,
+  // and with SIG_IGN it will fail with ECHILD and enter guaranteed CPU load.
   unsafe { libc::signal(libc::SIGCHLD, libc::SIG_IGN); }
 
   //
   loop 
   {
-    // Получаем путь к сокету для нового клона
+    // Get the socket path for the new clone
     if readMessage(&mut socket).is_err() {
-      std::process::exit(0); // Parent умер
+      std::process::exit(0); // Parent died
     }
 
-    // Создаем парный сокет в памяти для нового клона
+    // Create a paired socket in memory for the new clone
     let (runtimeSocket, cloneSocket): (UnixStream, UnixStream) = match UnixStream::pair() {
       Ok(pair) => pair,
       Err(_) => {
@@ -261,12 +273,12 @@ fn zygoteLoop(mut socket: UnixStream) -> !
         let _ = writeMessage(&mut socket, &0i32.to_le_bytes());
       }
       0 => {
-        // Клон-зигота: закрываем родительскую сторону и уходим в цикл
+        // Zygote clone: close the parent side and enter the loop
         drop(runtimeSocket);
         cloneLoop(cloneSocket);
       }
       pid => {
-        // Главная зигота: отправляем PID и пересылаем дескриптор сокета в Runtime
+        // Main zygote: send the PID and forward the socket descriptor to the Runtime
         drop(cloneSocket);
         if writeMessage(&mut socket, &pid.to_le_bytes()).is_ok() {
           let _ = sendFd(&mut socket, runtimeSocket.as_raw_fd());
@@ -277,7 +289,7 @@ fn zygoteLoop(mut socket: UnixStream) -> !
   }
 }
 
-/// Персональный цикл клона
+/// Personal clone loop
 fn cloneLoop(mut socket: UnixStream) -> ! 
 {
   let mut libraryCache: FxHashMap<String, Library> = FxHashMap::default();
@@ -287,7 +299,9 @@ fn cloneLoop(mut socket: UnixStream) -> !
     let requestBytes: Vec<u8> = match readMessage(&mut socket) 
     {
       Ok(bytes) => bytes,
-      Err(_) => std::process::exit(0), // Переменную drop'нули — сокет закрылся, клон ушел
+      Err(_) =>
+        // The variable was dropped — the socket was closed, the clone exited.
+        std::process::exit(0)
     };
 
     let response: FFIResponse = handleRequest(&requestBytes, &mut libraryCache);
@@ -297,8 +311,9 @@ fn cloneLoop(mut socket: UnixStream) -> !
   }
 }
 
-/// Обрабатывает входящий запрос и выполняет FFI операцию с использованием кеша библиотек.
-/// Возвращает результат выполнения или описание ошибки.
+/// Handles an incoming request and performs an FFI operation using the library cache.
+///
+/// Returns the execution result or an error description.
 fn handleRequest(requestBytes: &[u8], cache: &mut FxHashMap<String, Library>) -> FFIResponse
 {
   match decode::<FFIRequest>(requestBytes)
@@ -314,8 +329,10 @@ fn handleRequest(requestBytes: &[u8], cache: &mut FxHashMap<String, Library>) ->
 
 // =================================================================================================
 
-/// Вызывается из workerManager::callExternal;
-/// при обрыве связи с Зиготой — пересоздаёт её (через Command) и повторяет запрос один раз.
+/// Called from worker - callExternal();
+///
+/// upon loss of connection with the zygote — 
+/// recreates it (via Command) and retries the request once.
 pub fn call(request: FFIRequest) -> Result<FFIResponse, String>
 {
   let bytes: Vec<u8> = encode(&request);
@@ -334,15 +351,16 @@ pub fn call(request: FFIRequest) -> Result<FFIResponse, String>
   decode(&responseBytes).map_err(|e| e.to_string())
 }
 
-/// Отправляет сообщение через сокет и ожидает ответ
+/// Sends a message through the socket and waits for a response.
 pub(super) fn sendAndReceive(socket: &mut UnixStream, bytes: &[u8]) -> io::Result<Vec<u8>>
 {
   writeMessage(socket, bytes)?;
   readMessage(socket)
 }
 
-/// Супервизор: блокируется на смерти текущей Зиготы (waitpid) и пересоздаёт её.
-/// Отдельный поток — поэтому spawnZygote() внутри обязан идти через Command, не через fork().
+/// Supervisor: blocks on the death of the current zygote (waitpid) and recreates it.
+/// 
+/// Separate thread — therefore spawnZygote() inside must go through Command, not fork().
 fn supervisorLoop() -> ()
 {
   loop
@@ -355,7 +373,7 @@ fn supervisorLoop() -> ()
 
     let mutex: &Mutex<ZygoteHandle> = ZygoteState.get().unwrap();
     let mut guard: MutexGuard<ZygoteHandle> = mutex.lock().unwrap();
-    if guard.process.id() == pidToWait // ещё не пересоздана параллельно через call()
+    if guard.process.id() == pidToWait // Not recreated in parallel yet through call()
     {
       match spawnZygote()
       {
@@ -369,14 +387,14 @@ fn supervisorLoop() -> ()
 
 // =================================================================================================
 
-/// Записывает сообщение в сокет с добавлением размера данных
+/// Writes a message to the socket with the data size prepended
 fn writeMessage(socket: &mut UnixStream, data: &[u8]) -> io::Result<()>
 {
   socket.write_all(&(data.len() as u32).to_le_bytes())?;
   socket.write_all(data)
 }
 
-/// Читает сообщение из сокета по длине, указанной в заголовке
+/// Reads a message from the socket using the length specified in the header
 fn readMessage(socket: &mut UnixStream) -> io::Result<Vec<u8>>
 {
   let mut lengthBuffer: [u8; 4] = [0u8; 4];
@@ -386,13 +404,13 @@ fn readMessage(socket: &mut UnixStream) -> io::Result<Vec<u8>>
   Ok(buffer)
 }
 
-/// Сериализует значение в байтовое представление
+/// Serializes a value into a byte representation
 pub(super) fn encode<T: Serialize>(value: &T) -> Vec<u8> 
 {
   let config: Configuration = bincode::config::standard();
   bincode::serde::encode_to_vec(value, config).expect("encode failed")
 }
-/// Десериализует байтовое представление обратно в значение
+/// Deserializes a byte representation back into a value
 pub(super) fn decode<T: for<'a> Deserialize<'a>>(bytes: &[u8]) -> Result<T, bincode::error::DecodeError> 
 {
   let config: Configuration = bincode::config::standard();
@@ -401,10 +419,12 @@ pub(super) fn decode<T: for<'a> Deserialize<'a>>(bytes: &[u8]) -> Result<T, binc
 
 // =================================================================================================
 
-/// Передает сокет-дескриптор в другой процесс через анонимный канал
+/// Sends the socket descriptor to 
+/// another process through an anonymous channel
 fn sendFd(socket: &mut UnixStream, fd: RawFd) -> io::Result<()> 
 {
-  // По стандарту POSIX для передачи cmsg нужен хотя бы 1 байт реальных данных
+  // According to the POSIX standard, 
+  // at least 1 byte of actual data is required to send cmsg.
   let mut msgHeader: libc::msghdr = unsafe { std::mem::zeroed() };
   let mut dummyByte: [u8; 1] = [0u8; 1];
 
@@ -413,7 +433,8 @@ fn sendFd(socket: &mut UnixStream, fd: RawFd) -> io::Result<()>
     iov_len: 1,
   };
 
-  // Выделяем память под служебное сообщение и упаковываем FD в структуру SCM_RIGHTS
+  // Allocate memory for the ancillary message 
+  // and pack the FD into the SCM_RIGHTS structure.
   let cmsgSpace: u32 = unsafe { libc::CMSG_SPACE(std::mem::size_of::<RawFd>() as u32) };
   let mut cmsgBuffer: Vec<u8> = vec![0u8; cmsgSpace as usize];
 
@@ -432,15 +453,16 @@ fn sendFd(socket: &mut UnixStream, fd: RawFd) -> io::Result<()>
     fdPtr.write_unaligned(fd);
   }
 
-  // Отправляем управляющий пакет через системный вызов ядра
+  // Send the control packet through the kernel system call
   let result: libc::ssize_t = unsafe { libc::sendmsg(socket.as_raw_fd(), &msgHeader, 0) };
   if result < 0 { Err(io::Error::last_os_error()) } else { Ok(()) }
 }
 
-/// Принимает сокет-дескриптор напрямую из памяти другого процесса
+/// Receives the socket descriptor directly 
+/// from the memory of another process
 fn recvFd(socket: &mut UnixStream) -> io::Result<RawFd> 
 {
-  // Готовим буферы для приема байта-пустышки и служебного заголовка
+  // Prepare buffers to receive the dummy byte and the ancillary header
   let mut msgHeader: libc::msghdr = unsafe { std::mem::zeroed() };
   let mut dummyByte: [u8; 1] = [0u8; 1];
 
@@ -457,11 +479,11 @@ fn recvFd(socket: &mut UnixStream) -> io::Result<RawFd>
   msgHeader.msg_control = cmsgBuffer.as_mut_ptr() as *mut _;
   msgHeader.msg_controllen = cmsgBuffer.len() as _;
 
-  // Читаем сообщение из сокета
+  // Read the message from the socket
   let result: libc::ssize_t = unsafe { libc::recvmsg(socket.as_raw_fd(), &mut msgHeader as *mut _, 0) };
   if result <= 0 { return Err(io::Error::last_os_error()); }
 
-  // Проверяем наличие прав доступа и извлекаем полученный дескриптор
+  // Check for access permissions and extract the received descriptor
   unsafe {
     let cmsg: *mut libc::cmsghdr = libc::CMSG_FIRSTHDR(&msgHeader);
     if cmsg.is_null() || (*cmsg).cmsg_type != libc::SCM_RIGHTS {

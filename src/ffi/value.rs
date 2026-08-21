@@ -1,12 +1,13 @@
 use serde::{Deserialize, Serialize};
 // =================================================================================================
 
-/// Значение, которое может быть передано между процессами 
-/// и использовано при вызове FFI.
+/// A value that can be passed between processes
+/// and used when calling FFI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Value
 {
-  None, // Просто пустое значение
+  /// Just an empty value
+  None,
   //
   U8(u8),
   U16(u16),
@@ -24,7 +25,7 @@ pub enum Value
   F64(f64),
   //
   Bool(bool),
-  // Универсальный контейнер для произвольных байтовых данных
+  /// Universal container for arbitrary byte data
   ByteVector(Vec<u8>) // todo Не знаю насколько правильно это иметь тут, но
                       //  это самый простой вариант передачи без нарушения адресного пространства.
                       //  Но опять же кодировки и другие штуки как будут тут себя вести?
@@ -33,11 +34,13 @@ pub enum Value
 
 // =================================================================================================
 
-/// Описание типа значения для определения аргументов и результата FFI
+/// Description of the value type 
+/// for defining FFI arguments and result
 #[derive(Serialize, Deserialize)]
 pub enum Type
 {
-  None, // Просто пустое значение
+  /// Just an empty value
+  None,
   //
   U8,
   U16,
@@ -55,7 +58,8 @@ pub enum Type
   F64,
   //
   Bool,
-  Pointer // Сырой указатель
+  /// Raw pointer
+  Pointer
 }
 
 // =================================================================================================

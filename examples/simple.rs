@@ -5,10 +5,10 @@ use chillffi::ffi;
 
 fn main() -> ()
 {
-  // Если запущен как зигота, переключаемся в режим обработки запросов
+  // If launched as a zygote, switch to request processing mode
   setupZygote().expect("Failed to setup zygote");
-  
-  // Тест 1: Вызов sqrt(4.0) из libm.so
+
+  // Test 1: Call sqrt(4.0) from libm.so
   let result: Value = ffi!{
     let libm: Library = Library::load("libm.so.6")?;
     let args: Vec<Value> = vec![Value::F64(4.0)];
@@ -25,7 +25,7 @@ fn main() -> ()
     _ => panic!("Unexpected return type for sqrt"),
   }
 
-  // Тест 2: Вызов abs(-5) из libm.so
+  // Test 2: Call abs(-5) from libm.so
   let result: Value = ffi!{
     let libm: Library = Library::load("libm.so.6")?;
     let args: Vec<Value> = vec![Value::I32(-5)];
@@ -42,6 +42,7 @@ fn main() -> ()
     _ => panic!("Unexpected return type for abs"),
   }
 
+  //
   println!("All tests passed!");
 }
 
