@@ -39,33 +39,33 @@ use crate::worker::executeFFI;
 
 /// Hidden startup flag: if it is the first argument — 
 /// this is not the runtime, but the zygote process.
-pub const ZygoteFlag: &str = "__zygote";
+pub(super) const ZygoteFlag: &str = "__zygote";
 
 /// Request for FFI execution, sent entirely to the zygote
 #[derive(Serialize, Deserialize)]
-pub enum FFIRequest
+pub(super) enum FFIRequest
 {
-  /// todo desc
+  /// Calls a function from a dynamic library with the given arguments and expected return type.
   Call { libraryPath: String, functionName: String, args: Vec<Value>, resultType: Type },
-  
-  /// todo desc
+
+  /// Allocates a block of memory of the specified length in the zygote address space.
   Alloc { length: usize },
-  /// todo desc
+  /// Frees a previously allocated memory block by its pointer.
   Free { pointer: usize },
-  
-  /// todo desc
+
+  /// Reads a raw memory block of the given length starting at the specified pointer.
   ReadMemory { pointer: usize, length: usize },
-  /// todo desc
+  /// Writes a value to the specified address in the zygote memory.
   WriteMemory { pointer: usize, value: Value }
 }
 
 /// Response to the request with the execution result or error
 #[derive(Serialize, Deserialize)]
-pub enum FFIResponse
+pub(super) enum FFIResponse
 {
-  /// todo desc
+  /// Successful execution with the returned value.
   Ok(Value),
-  /// todo desc
+  /// Execution failed with the corresponding error.
   Err(FFIError)
 }
 
@@ -111,7 +111,7 @@ impl ClonedZygote
     let mutex: &Mutex<ZygoteHandle> = ZygoteState.get()
       .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Zygote not initialized"))?;
     let mut guard: MutexGuard<ZygoteHandle> = mutex.lock()
-      .map_err(|_| io::Error::new(io::ErrorKind::Other, "Zygote mutex poisoned"))?;
+      .map_err(|_| io::Error::other("Zygote mutex poisoned"))?;
 
     // Sends a signal to create a clone
     writeMessage(&mut guard.socket, &[1u8])?;
@@ -130,7 +130,7 @@ impl ClonedZygote
   }
 
   /// FFI call inside a specific clone
-  pub fn call(&mut self, request: FFIRequest) -> Result<FFIResponse, String>
+  pub(super) fn call(&mut self, request: FFIRequest) -> Result<FFIResponse, String>
   {
     let bytes: Vec<u8> = encode(&request).map_err(|e| e.to_string())?;
     let responseBytes: Vec<u8> = sendAndReceive(&mut self.socket, &bytes)
@@ -335,22 +335,6 @@ fn handleRequest(requestBytes: &[u8], cache: &mut FxHashMap<String, Library>) ->
 }
 
 // =================================================================================================
-
-/// Called from worker — callExternal(). Будет всего одна попытка.
-pub fn call(request: FFIRequest) -> Result<FFIResponse, String>
-{
-  let mutex: &Mutex<ZygoteHandle> = ZygoteState.get()
-    .ok_or_else(|| "Zygote not initialized".to_string())?;
-  let mut guard: MutexGuard<ZygoteHandle> = mutex.lock()
-    .map_err(|_| "Zygote mutex poisoned".to_string())?;
-
-  let bytes: Vec<u8> = encode(&request).map_err(|e| e.to_string())?;
-  let responseBytes: Vec<u8> = sendAndReceive(&mut guard.socket, &bytes)
-    .map_err(|e| e.to_string())?;
-  drop(guard);
-
-  decode(&responseBytes).map_err(|e| e.to_string())
-}
 
 /// Sends a message through the socket and waits for a response.
 pub(super) fn sendAndReceive(socket: &mut UnixStream, bytes: &[u8]) -> io::Result<Vec<u8>>

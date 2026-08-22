@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
 // =================================================================================================
 
-/// A value that can be passed between processes
-/// and used when calling FFI.
+/// A value that can be passed between processes and used when calling FFI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Value
 {
@@ -66,7 +65,7 @@ pub enum Value
 // =================================================================================================
 
 /// Description of the value type 
-/// for defining FFI arguments and result
+/// for defining FFI arguments and result.
 ///
 /// todo: add unit tests for Type variants verification
 #[derive(Serialize, Deserialize)]

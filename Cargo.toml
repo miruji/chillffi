@@ -6,19 +6,15 @@ edition = "2024"
 #
 authors = ["miruji <miruji@protonmail.com>"]
 description = "A simple isolated dynamic FFI framework for Rust"
-license-file = "LICENCE.md" # FCL
+license-file = "LICENSE.md" # FCL
 readme = "README.md"
 
 # ======================================================================================================================
 
-#repository = "https://github.com/username/chillffi"
-#keywords = ["ffi", "zygote", "ipc", "sandbox", "fork"]
-#categories = ["external-ffi-bindings", "os::unix-apis", "c-bindings", "api-bindings"]
-publish = false
-
-#documentation = "https://docs.rs/chillffi"
-[package.metadata.docs.rs]
-targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
+repository = "https://github.com/rts-lang/chillffi"
+keywords = ["ffi", "zygote", "ipc", "sandbox", "fork"]
+categories = ["external-ffi-bindings", "os::unix-apis", "api-bindings"]
+publish = true
 
 include = [
   "src/**/*",
@@ -27,6 +23,10 @@ include = [
   "README.md",
   "LICENSE.md",
 ]
+
+documentation = "https://docs.rs/chillffi"
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
 
 # ======================================================================================================================
 
@@ -118,6 +118,7 @@ path = "examples/simple.rs"
 unused_unit = "allow"
 option_if_let_else = "allow"
 collapsible_if = "allow"
+too_long_first_doc_paragraph = "allow"
 nursery = { level = "warn", priority = -1 } # At the very bottom
 
 # ======================================================================================================================

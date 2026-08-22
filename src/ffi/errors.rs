@@ -38,6 +38,7 @@ pub enum FFIError
 
 impl std::fmt::Display for FFIError
 {
+  #[inline]
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result
   {
     write!(f, "{:?}", self)
@@ -46,6 +47,7 @@ impl std::fmt::Display for FFIError
 
 impl<E: std::error::Error + 'static> From<E> for FFIError
 {
+  #[inline]
   fn from(err: E) -> Self {
     Self::Other(err.to_string())
   }

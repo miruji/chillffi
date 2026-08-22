@@ -6,15 +6,16 @@ use crate::ffi::value::Value;
 use crate::zygote::FFIRequest;
 // =================================================================================================
 
-/// todo desc
+/// Heavy stack or arena for temporary allocations within an ffi!{} scope.
 struct HeavyStack
 {
-  // Выделенный стек или арена
+  // Allocated stack or arena
 }
 
-/// Владелец HeavyStack. Заводится макросом ffi!{} один раз на блок (только если
-/// пользователь запросил Scope), живёт и умирает строго с этим блоком.
-/// Не публикуется напрямую — доступ только через Scope<'g>.
+/// Owner of HeavyStack. Created by the ffi!{} macro once per block (only if
+/// the user requested Scope), lives and dies strictly with this block.
+/// 
+/// Is not published directly — access only through Scope<'g>.
 #[doc(hidden)]
 pub struct ScopeGuard
 {
@@ -24,15 +25,17 @@ pub struct ScopeGuard
 impl ScopeGuard
 {
   #[doc(hidden)]
-  pub fn new() -> Self
+  #[inline(always)]
+  pub const fn new() -> Self
   {
     Self { inner: UnsafeCell::new(None) }
   }
 }
 
-/// Ручка на ScopeGuard текущего ffi!{}-блока — заимствует его на 'g.
-/// Именно поэтому AllocatedMemory<'g> не может покинуть блок: ScopeGuard,
-/// которого она заимствует, дропается на границе блока, и это проверяет компилятор.
+/// A handle to the ScopeGuard of the current ffi!{}-block — borrows it for 'g.
+/// 
+/// That is precisely why AllocatedMemory<'g> cannot leave the block: the ScopeGuard,
+/// which it borrows, is dropped at the boundary of the block, and this is checked by the compiler.
 pub struct Scope<'g>
 {
   guard: &'g ScopeGuard,
@@ -41,7 +44,8 @@ pub struct Scope<'g>
 impl<'g> Scope<'g>
 {
   #[doc(hidden)]
-  pub fn new(guard: &'g ScopeGuard) -> Self
+  #[inline(always)]
+  pub const fn new(guard: &'g ScopeGuard) -> Self
   {
     Self { guard }
   }
@@ -52,13 +56,13 @@ impl<'g> Scope<'g>
     unsafe {
       let stack: &mut Option<HeavyStack> = &mut *self.guard.inner.get();
 
-      // Инициализация тяжелого стека происходит ТОЛЬКО при первом вызове alloc()
+      // Initialization of the heavy stack happens only on the first call to alloc()
       if stack.is_none() {
         *stack = Some(HeavyStack{});
       }
     }
 
-    // Выделение памяти через зиготу
+    // Memory allocation through zigot
     match sendRawRequest(FFIRequest::Alloc { length })? {
       Value::Pointer(address) => Ok(AllocatedMemory::new(address, length)),
       _ => Err(FFIError::Other("Alloc did not return a pointer".to_string())),
@@ -66,6 +70,7 @@ impl<'g> Scope<'g>
   }
 
   /// Frees memory previously obtained via `alloc` (or a C-side allocator).
+  #[inline]
   pub fn free(pointer: usize) -> Result<(), FFIError>
   {
     sendRawRequest(FFIRequest::Free { pointer })?;
@@ -73,12 +78,14 @@ impl<'g> Scope<'g>
   }
 
   /// Reads `length` bytes at `pointer` from the clone's memory.
+  #[inline]
   pub fn readMemory(pointer: usize, length: usize) -> Result<Value, FFIError>
   {
     sendRawRequest(FFIRequest::ReadMemory { pointer, length })
   }
 
   /// Writes data from `Value` into the clone's memory at `pointer`.
+  #[inline]
   pub fn writeMemory(pointer: usize, value: Value) -> Result<(), FFIError>
   {
     sendRawRequest(FFIRequest::WriteMemory { pointer, value })?;
@@ -88,7 +95,7 @@ impl<'g> Scope<'g>
 
 // =================================================================================================
 
-#[cfg(test)]#[cfg(test)]
+#[cfg(test)]
 mod tests
 {
   use crate::ffi;
