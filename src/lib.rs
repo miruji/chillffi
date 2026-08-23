@@ -169,7 +169,7 @@ compile_error!("chillffi supports only Linux operating systems.");
 mod worker;
 mod zygote;
 pub mod ffi;
-
+pub mod pathResolver;
 // =================================================================================================
 
 use std::{env};

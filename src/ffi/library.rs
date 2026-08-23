@@ -1,19 +1,22 @@
+use parking_lot::RwLockReadGuard;
+use parking_lot::RwLock;
+use crate::pathResolver::resolveGlobal;
+use crate::ffi::scope;
 use std::cell::RefMut;
 use crate::ffi::errors::FFIError;
 use fxhash::FxHashMap;
-use std::sync::MutexGuard;
 use crate::zygote::ClonedZygote;
 use crate::zygote::ZygoteState;
 use crate::ffi::value::{Type, Value};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{OnceLock};
 use crate::zygote::{FFIRequest, FFIResponse, ZygoteStack};
 // =================================================================================================
 
 /// Counter for assigning unique identifiers to libraries.
 static NextLibraryID: AtomicUsize = AtomicUsize::new(1);
 /// Global registry of loaded libraries by their identifiers.
-static RegisteredLibraries: OnceLock<Mutex<FxHashMap<usize, String>>> = OnceLock::new();
+static RegisteredLibraries: OnceLock<RwLock<FxHashMap<usize, String>>> = OnceLock::new();
 
 /// Returns the next unique library identifier.
 #[inline(always)]
@@ -24,32 +27,24 @@ fn nextLibraryId() -> usize
 
 /// Returns the global registry of registered libraries.
 #[inline(always)]
-fn getRegistry() -> &'static Mutex<FxHashMap<usize, String>>
+fn getRegistry() -> &'static RwLock<FxHashMap<usize, String>>
 {
-  RegisteredLibraries.get_or_init(|| Mutex::new(FxHashMap::default()))
-}
-
-/// Acquires the lock on the global library registry, returning the mutex guard.
-#[inline]
-fn lockRegistry() -> MutexGuard<'static, FxHashMap<usize, String>>
-{
-  getRegistry().lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+  RegisteredLibraries.get_or_init(|| RwLock::new(FxHashMap::default()))
 }
 
 /// Adds a library to the registry by its identifier.
 #[inline]
 fn registerLibrary(id: usize, path: &str) -> ()
 {
-  let mut registry: MutexGuard<FxHashMap<usize, String>> = lockRegistry();
-  registry.insert(id, path.to_string());
+  getRegistry().write().insert(id, path.to_string());
 }
 
 /// Removes a library from the registry by its identifier.
 #[inline]
+
 fn unregisterLibrary(id: usize) -> ()
 {
-  let mut registry: MutexGuard<FxHashMap<usize, String>> = lockRegistry();
-  registry.remove(&id);
+  getRegistry().write().remove(&id);
 }
 
 // =================================================================================================
@@ -97,7 +92,7 @@ fn callById(
   }
 
   // Retrieve the path to the `.so` from the registry and construct an FFIRequest
-  let registry: MutexGuard<FxHashMap<usize, String>> = lockRegistry();
+  let registry: RwLockReadGuard<FxHashMap<usize, String>> = getRegistry().read();
   if !registry.contains_key(&libraryId) {
      return Err(FFIError::LibraryNotFound{ libraryPath: libraryPath.to_string() });
   }
@@ -156,10 +151,13 @@ impl __Library<true>
   /// Loads the library and registers it for further calls.
   pub fn load(libraryPath: &str) -> Result<Self, FFIError>
   {
+    let resolved: String = scope::resolveViaScope(libraryPath)
+      .or_else(|| resolveGlobal(libraryPath))
+      .unwrap_or_else(|| libraryPath.to_string());
+
     let libraryId: usize = nextLibraryId();
-    let ownedPath: String = String::from(libraryPath);
-    registerLibrary(libraryId, &ownedPath);
-    Ok(Self{ libraryId, libraryPath: ownedPath })
+    registerLibrary(libraryId, &resolved);
+    Ok(Self{ libraryId, libraryPath: resolved })
   }
   
   /// Unloads the library and removes it from the registry;
@@ -188,7 +186,7 @@ pub type __FFILibrary = __Library<true>;
 mod tests
 {
   use crate::ffi;
-  use crate::ffi::library::lockRegistry;
+  use crate::ffi::library::getRegistry;
   use crate::ffi::value::Value;
   use crate::ffi::value::Type;
   // ===============================================================================================
@@ -204,7 +202,7 @@ mod tests
       Ok(id)
     }.expect("ffi block failed");
 
-    assert!(!lockRegistry().contains_key(&id));
+    assert!(!getRegistry().read().contains_key(&id));
   }
 
   /// Checks that library is removed from registry 
@@ -218,7 +216,7 @@ mod tests
       Ok(id)
     }.expect("ffi block failed");
 
-    assert!(!lockRegistry().contains_key(&id));
+    assert!(!getRegistry().read().contains_key(&id));
   }
 
   /// Checks that library is removed from registry 
@@ -233,7 +231,7 @@ mod tests
       Ok(id)
     }.expect("ffi block failed");
 
-    assert!(!lockRegistry().contains_key(&id));
+    assert!(!getRegistry().read().contains_key(&id));
   }
 
   // ===============================================================================================

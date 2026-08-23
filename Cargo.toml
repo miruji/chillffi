@@ -80,13 +80,16 @@ libc = { version = "1.0.0-alpha.4" }
 # redirection of stdout → stderr, isolating the library output from the service channel.
 
 serde = { version = "1.0.229", features = ["derive"] }
-# Serialization and deserialization of request and response structures
+# Serialization and deserialization of request and response structures.
 
 ctor = "1.0.13"
-# Execution of functions at process startup for automatic initialization
+# Execution of functions at process startup for automatic initialization.
 
 fxhash = "0.2.1"
-# Fast HashMap without additional protection against hash attacks
+# Fast HashMap without additional protection against hash attacks.
+
+parking_lot = "0.12.5"
+# Fast and compact synchronization primitives without lock poisoning.
 
 # ======================================================================================================================
 
