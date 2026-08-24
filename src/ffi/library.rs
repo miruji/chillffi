@@ -1,3 +1,4 @@
+use crate::ffi::value::Primitive;
 use parking_lot::RwLockReadGuard;
 use parking_lot::RwLock;
 use crate::pathResolver::resolveGlobal;
@@ -138,14 +139,22 @@ impl<const Allowed: bool> Drop for __Library<Allowed>
 impl __Library<true>
 {
   /// Executes a function call from the loaded library.
-  pub fn call(
-    &self,
-    functionName: &str,
-    args: Vec<Value>,
-    resultType: Type,
-  ) -> Result<Value, FFIError>
+  /// 
+  /// todo Должен быть полностью скрыт и не работать напрямую
+  #[doc(hidden)]
+  pub fn call<T: Primitive>(&self, functionName: &str, args: Vec<Value>) -> Result<T, FFIError>
   {
-    callById(self.libraryId, &self.libraryPath, functionName, args, resultType)
+    let raw: Value = callById(self.libraryId, &self.libraryPath, functionName, args, T::TypeTag)?;
+    T::fromValue(raw)
+  }
+
+  /// Fire-and-forget вариант: вызов без ожидания и типизации результата.
+  ///
+  /// todo Должен быть полностью скрыт и не работать напрямую
+  #[doc(hidden)]
+  pub fn callv(&self, functionName: &str, args: Vec<Value>) -> Result<(), FFIError>
+  {
+    self.call::<()>(functionName, args)
   }
 
   /// Loads the library and registers it for further calls.
@@ -182,13 +191,33 @@ pub type __FFILibrary = __Library<true>;
 
 // =================================================================================================
 
+/// Executes a function call from the loaded library and casts the result to the expected type.
+#[macro_export]
+macro_rules! call {
+  ($lib:expr, $name:expr $(, $args:expr)* $(,)?) => {
+    $lib.call($name, vec![$($args.into()),*])
+  };
+}
+
+/// Executes a function call from the loaded library without expecting or typing a return value.
+#[macro_export]
+macro_rules! callv {
+  ($lib:expr, $name:expr $(, $args:expr)* $(,)?) => {
+    $lib.callv($name, vec![$($args.into()),*])
+  };
+}
+
+// Варианта с `let a = call!(` нет. Потому что ты либо void ждешь, либо указываешь тип.
+// Было бы грубо делать иное указание типа, если ты можешь это сделать сразу в `let a:`.
+
+// =================================================================================================
+
 #[cfg(test)]
 mod tests
 {
   use crate::ffi;
   use crate::ffi::library::getRegistry;
   use crate::ffi::value::Value;
-  use crate::ffi::value::Type;
   // ===============================================================================================
 
   /// Checks that library is removed from registry when explicitly dropped.
@@ -240,34 +269,24 @@ mod tests
   #[test]
   fn sqrt() -> ()
   {
-    let result: Value = ffi!{
+    let result: f64 = ffi!{
       let libm: Library = Library::load("libm.so.6")?;
-      let args: Vec<Value> = vec![Value::F64(4.0)];
-      Ok(libm.call("sqrt", args, Type::F64)?)
+      Ok(call!(libm, "sqrt", 4.0 as f64)?)
     }.expect("FFI call failed");
-
-    if let Value::F64(val) = result {
-      assert!((val - 2.0).abs() < f64::EPSILON);
-    } else {
-      panic!("Expected F64");
-    }
+    
+    assert!((result - 2.0).abs() < f64::EPSILON);
   }
 
   /// Checks calling the abs function from the libm library.
   #[test]
   fn abs() -> ()
   {
-    let result: Value = ffi!{
+    let result: i32 = ffi!{
       let libm: Library = Library::load("libm.so.6")?;
-      let args: Vec<Value> = vec![Value::I32(-5)];
-      Ok(libm.call("abs", args, Type::I32)?)
+      Ok(call!(libm, "abs", -5 as i32)?)
     }.expect("FFI call failed");
-
-    if let Value::I32(val) = result {
-      assert_eq!(val, 5);
-    } else {
-      panic!("Expected I32");
-    }
+    
+    assert_eq!(result, 5);
   }
 
   // ===============================================================================================
@@ -276,16 +295,15 @@ mod tests
   #[test]
   fn multipleCallsInSingleLibrary() -> ()
   {
-    let results: Vec<Value> = ffi!{
-      let mut outputs: Vec<Value> = Vec::with_capacity(10);
+    let results: Vec<f64> = ffi!{
+      let mut outputs: Vec<f64> = Vec::with_capacity(10);
       let libm: Library = Library::load("libm.so.6")?;
   
-      // 10 consecutive libm.call() calls with a single loaded library
+      // 10 consecutive calls with a single loaded library
       for i in 1..=10 
       {
         let input: f64 = (i * i) as f64;
-        let args: Vec<Value> = vec![Value::F64(input)];
-        let res: Value = libm.call("sqrt", args, Type::F64)?;
+        let res: f64 = call!(libm, "sqrt", input)?;
         outputs.push(res);
       }
   
@@ -297,11 +315,7 @@ mod tests
     for (i, val) in results.into_iter().enumerate()
     {
       let expected: f64 = (i + 1) as f64;
-      if let Value::F64(actual) = val {
-        assert!((actual - expected).abs() < f64::EPSILON, "Expected {}, got {}", expected, actual);
-      } else {
-        panic!("Expected Value::F64 at index {}", i);
-      }
+      assert!((val - expected).abs() < f64::EPSILON, "Expected {}, got {}", expected, val);
     }
   }
 
@@ -311,10 +325,9 @@ mod tests
   #[test]
   fn noneArgumentFails() -> ()
   {
-    let result: Result<Value, _> = ffi!{
+    let result: Result<f64, _> = ffi!{
       let libm: Library = Library::load("libm.so.6")?;
-      let args: Vec<Value> = vec![Value::None];
-      let res: Value = libm.call("sqrt", args, Type::F64)?;
+      let res: f64 = call!(libm, "sqrt", Value::None)?;
       Ok(res)
     };
 

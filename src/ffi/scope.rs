@@ -113,24 +113,24 @@ impl<'g> Scope<'g>
 
   /// Frees memory previously obtained via `alloc` (or a C-side allocator).
   #[inline]
-  pub fn free(pointer: usize) -> Result<(), FFIError>
+  pub fn free(pointer: impl Into<usize>) -> Result<(), FFIError>
   {
-    sendRawRequest(FFIRequest::Free { pointer })?;
+    sendRawRequest(FFIRequest::Free { pointer: pointer.into() })?;
     Ok(())
   }
 
   /// Reads `length` bytes at `pointer` from the clone's memory.
   #[inline]
-  pub fn readMemory(pointer: usize, length: usize) -> Result<Value, FFIError>
+  pub fn readMemory(pointer: impl Into<usize>, length: usize) -> Result<Value, FFIError>
   {
-    sendRawRequest(FFIRequest::ReadMemory { pointer, length })
+    sendRawRequest(FFIRequest::ReadMemory { pointer: pointer.into(), length })
   }
 
   /// Writes data from `Value` into the clone's memory at `pointer`.
   #[inline]
-  pub fn writeMemory(pointer: usize, value: Value) -> Result<(), FFIError>
+  pub fn writeMemory(pointer: impl Into<usize>, value: Value) -> Result<(), FFIError>
   {
-    sendRawRequest(FFIRequest::WriteMemory { pointer, value })?;
+    sendRawRequest(FFIRequest::WriteMemory { pointer: pointer.into(), value })?;
     Ok(())
   }
 
@@ -148,11 +148,11 @@ impl<'g> Drop for Scope<'g>
 mod tests
 {
   use crate::ffi;
+  use crate::call;
+  use crate::callv;
   use crate::ffi::errors::FFIError;
   use crate::ffi::scope::Scope;
-  use crate::ffi::value::Value;
-  use crate::ffi::value::Type;
-
+  use crate::ffi::value::{Pointer, Value};
   // ===============================================================================================
 
   /// Checks explicit memory release via Scope::free.
@@ -161,12 +161,9 @@ mod tests
   {
     ffi!{
       let libc: Library = Library::load("libc.so.6")?;
-      let ptr: Value = libc.call("malloc", vec![Value::Usize(16)], Type::Pointer)?;
-      let Value::Pointer(addr) = ptr else {
-        return Err(FFIError::Other("expected pointer".into()))
-      };
+      let ptr: Pointer = call!(libc, "malloc", 16 as usize)?;
 
-      Scope::free(addr)?;
+      Scope::free(ptr)?;
       Ok(())
     }.expect("Scope::free failed");
   }
@@ -177,18 +174,15 @@ mod tests
   {
     let bytes: Vec<u8> = ffi!{
       let libc: Library = Library::load("libc.so.6")?;
-      let ptr: Value = libc.call("malloc", vec![Value::Usize(8)], Type::Pointer)?;
-      let Value::Pointer(addr) = ptr else {
-        return Err(FFIError::Other("expected pointer".into()))
-      };
+      let ptr: Pointer = call!(libc, "malloc", 8 as usize)?;
 
-      libc.call("memset", vec![Value::Pointer(addr), Value::I32(0xAB), Value::Usize(8)], Type::Pointer)?;
+      callv!(libc, "memset", ptr, 0xAB as i32, 8 as usize)?;
 
-      let Value::RawString(readBytes) = Scope::readMemory(addr, 8)? else {
+      let Value::RawString(readBytes) = Scope::readMemory(ptr, 8)? else {
         return Err(FFIError::Other("expected bytes".into()))
       };
 
-      Scope::free(addr)?;
+      Scope::free(ptr)?;
       Ok(readBytes)
     }.expect("Scope::readMemory failed");
 
@@ -199,22 +193,19 @@ mod tests
   #[test]
   fn writeMemory() -> ()
   {
-    let len: Value = ffi!{
+    let len: usize = ffi!{
       let libc: Library = Library::load("libc.so.6")?;
-      let ptr: Value = libc.call("malloc", vec![Value::Usize(32)], Type::Pointer)?;
-      let Value::Pointer(addr) = ptr else {
-        return Err(FFIError::Other("expected pointer".into()))
-      };
+      let ptr: Pointer = call!(libc, "malloc", 32 as usize)?;
 
-      Scope::writeMemory(addr, Value::CString(b"hello".to_vec()))?;
+      Scope::writeMemory(ptr, Value::CString(b"hello".to_vec()))?;
 
-      let result: Value = libc.call("strlen", vec![Value::Pointer(addr)], Type::Usize)?;
+      let result: usize = call!(libc, "strlen", ptr)?;
 
-      Scope::free(addr)?;
+      Scope::free(ptr)?;
       Ok(result)
     }.expect("Scope::writeMemory failed");
 
-    assert!(matches!(len, Value::Usize(5)));
+    assert!(matches!(len, 5));
   }
 
   // ===============================================================================================

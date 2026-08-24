@@ -80,10 +80,11 @@ impl<'g> Drop for AllocatedMemory<'g>
 mod tests
 {
   use crate::ffi;
+  use crate::call;
+  use crate::callv;
   use crate::ffi::allocatedMemory::AllocatedMemory;
   use crate::ffi::errors::FFIError;
   use crate::ffi::value::Value;
-  use crate::ffi::value::Type;
   // ===============================================================================================
 
   /// Checks reading memory via AllocatedMemory::read.
@@ -95,7 +96,7 @@ mod tests
 
       let libc: Library = Library::load("libc.so.6")?;
       // void *memset(void *s, int c, size_t n) — fills 8 bytes with 0xAB
-      libc.call("memset", vec![mem.asPointer(), Value::I32(0xAB), Value::Usize(8)], Type::Pointer)?;
+      callv!(libc, "memset", mem.asPointer(), 0xAB as i32, 8 as usize)?;
 
       let Value::RawString(bytes) = mem.read()? else { 
         return Err(FFIError::Other("expected bytes".into())) 
@@ -111,18 +112,18 @@ mod tests
   #[test]
   fn write() -> ()
   {
-    let len: Value = ffi!(|scope| {
+    let len: usize = ffi!(|scope| {
       let mem: AllocatedMemory = scope.alloc(32)?;
 
       mem.write(Value::CString(b"hello".to_vec()))?;
 
       let libc: Library = Library::load("libc.so.6")?;
-      let result: Value = libc.call("strlen", vec![mem.asPointer()], Type::Usize)?;
+      let result: usize = call!(libc, "strlen", mem.asPointer())?;
 
       Ok(result)
     }).expect("AllocatedMemory::write failed");
 
-    assert!(matches!(len, Value::Usize(5)));
+    assert!(matches!(len, 5));
   }
 
   /// Checks automatic deallocation via Drop when AllocatedMemory leaves scope.

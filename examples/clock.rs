@@ -1,5 +1,6 @@
+use chillffi::callv;
 use chillffi::ffi::allocatedMemory::{AllocatedMemory};
-use chillffi::ffi::value::{Type, Value};
+use chillffi::ffi::value::{Value};
 use chillffi::ffi::errors::FFIError;
 use chillffi::ffi;
 // =================================================================================================
@@ -14,7 +15,7 @@ fn main() -> ()
     // struct timespec { time_t tv_sec; long tv_nsec; } — 16 bytes on x86_64 Linux
     let mem: AllocatedMemory = scope.alloc(16)?;
 
-    libc.call("clock_gettime", vec![Value::I32(0 /* CLOCK_REALTIME */), mem.asPointer()], Type::I32)?;
+    callv!(libc, "clock_gettime", 0 as i32 /* CLOCK_REALTIME */, mem.asPointer())?;
 
     let Value::RawString(bytes) = mem.read()? else { 
       return Err(FFIError::Other("expected bytes".into())) 

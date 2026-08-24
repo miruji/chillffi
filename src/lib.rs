@@ -29,36 +29,27 @@
 //! # Quick start
 //!
 //! ```no_run
-//! use chillffi::ffi::value::{Type, Value};
+//! use chillffi::ffi::value::{Value};
+//! use chillffi::call;
 //! use chillffi::ffi;
 //! 
 //! fn main() -> ()
 //! {
 //!   // Perform an FFI call inside an isolated context using a macro
-//!   let result: Value = ffi!{
-//!     // 1. Dynamically load the system library
+//!   let result: f64 = ffi!{
+//!     // Dynamically load the system library
 //!     let libm: Library = Library::load("libm.so.6")?;
 //!   
-//!     // 2. Prepare the argument vector
-//!     let args: Vec<Value> = vec![Value::F64(4.0)];
-//!   
-//!     // 3. Call the "sqrt" function, specifying the expected return type Type::F64
-//!     Ok(libm.call("sqrt", args, Type::F64)?)
+//!     // Call the "sqrt" function, specifying the expected return type
+//!     Ok(call!(libm, "sqrt", 4.0 as f64)?)
 //!     
 //!     // Here libm will be automatically cleared due to drop() when exiting the closure.
 //!     // You can also do this manually via drop(libm) or libm.unload()?
 //!   }.expect("FFI call failed");
 //!
 //!   // Process the typed result
-//!   match result
-//!   {
-//!     Value::F64(val) => 
-//!     {
-//!       println!("sqrt(4.0) = {}", val);
-//!       assert!((val - 2.0).abs() < f64::EPSILON, "sqrt(4.0) != 2.0");
-//!     }
-//!     _ => panic!("Unexpected return type for sqrt"),
-//!   }
+//!   println!("sqrt(4.0) = {}", result);
+//!   assert!((result - 2.0).abs() < f64::EPSILON, "sqrt(4.0) != 2.0");
 //! }
 //! ```
 //!
@@ -68,8 +59,9 @@
 //!
 //! ```no_run
 //! use chillffi::ffi::allocatedMemory::{AllocatedMemory};
-//! use chillffi::ffi::value::{Type, Value};
+//! use chillffi::ffi::value::{Value};
 //! use chillffi::ffi::errors::FFIError;
+//! use chillffi::callv;
 //! use chillffi::ffi;
 //! 
 //! fn main() -> ()
@@ -82,7 +74,7 @@
 //!     // struct timespec { time_t tv_sec; long tv_nsec; } — 16 bytes on x86_64 Linux
 //!     let mem: AllocatedMemory = scope.alloc(16)?;
 //!
-//!     libc.call("clock_gettime", vec![Value::I32(0 /* CLOCK_REALTIME */), mem.asPointer()], Type::I32)?;
+//!     callv!(libc, "clock_gettime", 0 as i32 /* CLOCK_REALTIME */, mem.asPointer())?;
 //!
 //!     let Value::RawString(bytes) = mem.read()? else { 
 //!       panic!("expected bytes")

@@ -1,5 +1,6 @@
+use chillffi::callv;
 use chillffi::ffi::allocatedMemory::AllocatedMemory;
-use chillffi::ffi::value::{Type, Value};
+use chillffi::ffi::value::{Value};
 use chillffi::ffi::errors::FFIError;
 use chillffi::ffi;
 // =================================================================================================
@@ -17,7 +18,7 @@ fn println(text: &str) -> Result<(), FFIError>
     mem.write(Value::RawString(bytes))?;
 
     // puts(const char *s) automatically appends a newline
-    libc.call("puts", vec![mem.asPointer()], Type::I32)?;
+    callv!(libc, "puts", mem.asPointer())?;
     
     Ok(())
   })
