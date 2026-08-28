@@ -1,11 +1,103 @@
+use crate::ffi::callback;
+use parking_lot::{Mutex, RawMutex};
+use std::sync::OnceLock;
+use libffi::middle::Closure;
 use crate::ffi::errors::FFIError;
 use std::any::Any;
 use libloading::Library;
 use libffi::middle::{Arg, Cif, CodePtr};
 use std::ffi::c_void;
 use fxhash::FxHashMap;
+use parking_lot::lock_api::MutexGuard;
 use crate::ffi::value::{Type, Value};
 use crate::zygote::{FFIRequest};
+use crate::ffi::callback::Callable;
+// =================================================================================================
+
+/// Callback registry inside the clone (not parent)
+struct CallbackWrapper
+{
+  /// The decoded Rust closure to be invoked.
+  closure: Box<dyn Callable<Vec<Value>, Value>>,
+  
+  /// Expected FFI argument types for correct deserialization.
+  argTypes: Vec<Type>,
+  
+  /// Expected FFI return type.
+  returnType: Box<Type>
+}
+
+/// Holds the JIT-compiled closure and its raw function pointer for FFI execution.
+struct CallbackEntry
+{
+  /// Never read directly — kept alive purely for its `Drop` impl. `Closure`
+  /// owns the JIT-compiled trampoline memory that `codePointer` points into;
+  /// 
+  /// if this field were removed (or dropped early), `codePointer` would
+  /// dangle the moment registration returns, and C would jump into freed
+  /// memory on the very next call. This is intentional RAII, not dead code.
+  #[allow(dead_code)]
+  closure: Closure<'static>,
+  
+  /// Raw C function pointer to the JIT-compiled trampoline.
+  codePointer: *mut c_void
+}
+
+/// Safety: CallbackRegistry is used exclusively within a single fork-clone,
+/// which operates as a single-threaded process.
+unsafe impl Send for CallbackEntry {}
+
+/// Global map storing registered JIT-compiled callbacks by their unique IDs.
+static CallbackRegistry: OnceLock<Mutex<FxHashMap<u64, CallbackEntry>>> = OnceLock::new();
+
+thread_local! {
+  /// Set by `trampoline` if the user's closure panics mid-call.
+  ///
+  /// Panics cannot propagate through C stack frames. `catch_unwind` traps it, 
+  /// and this flag becomes the only way to surface the error. 
+  ///
+  /// `executeCall` checks this after the C call returns, producing a clean 
+  /// `FFIError` instead of silently returning a default/zero value.
+  static CallbackPanicked: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Initializes and returns a reference to the global callback registry.
+fn registry() -> &'static Mutex<FxHashMap<u64, CallbackEntry>> {
+  CallbackRegistry.get_or_init(|| Mutex::new(FxHashMap::default()))
+}
+
+/// The universal C-callable trampoline. 
+/// 
+/// Converts C arguments to Rust `Value`s, invokes the closure, and translates the result back.
+unsafe extern "C" fn trampoline(
+  _cif: &libffi::low::ffi_cif,
+  ret: &mut std::ffi::c_void,
+  args: *const *const std::ffi::c_void,
+  userdata: &CallbackWrapper,
+)
+{
+  // Safely construct a slice of raw C argument pointers based on the expected length.
+  let cArgs: &[*const c_void] = unsafe { std::slice::from_raw_parts(args, userdata.argTypes.len()) };
+  let mut rustArgs: Vec<Value> = Vec::with_capacity(userdata.argTypes.len());
+
+  // Convert each raw C argument into a safe Rust `Value` according to its expected signature.
+  for (i, typ) in userdata.argTypes.iter().enumerate() {
+    rustArgs.push(readArg(cArgs[i], typ));
+  }
+
+  // Invoke the Rust closure while catching panics to prevent unwinding across the C boundary.
+  //
+  // On panic, we signal the thread-local flag and return a dummy `None` value 
+  // so C code can gracefully resume (and eventually return control to our safe wrapper).
+  let result: Value =
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| userdata.closure.call(rustArgs)))
+      .unwrap_or_else(|_| {
+        CallbackPanicked.with(|f| f.set(true));
+        Value::None
+      });
+  writeRet(ret, result, &userdata.returnType);
+}
+
 // =================================================================================================
 
 /// Maps a Value variant to its corresponding libffi C ABI type(s).
@@ -30,18 +122,19 @@ fn toCifTypes(val: &Value) -> Result<Vec<libffi::middle::Type>, FFIError>
     Value::Pointer(_) => Ok(vec![libffi::middle::Type::pointer()]),
     Value::RawString(_) | Value::CString(_) => Ok(vec![libffi::middle::Type::pointer()]),
     Value::String(_) => Ok(vec![libffi::middle::Type::pointer(), libffi::middle::Type::usize()]),
+    Value::Function(_) => Ok(vec![libffi::middle::Type::pointer()]),
     Value::None => Err(FFIError::BadArgument("Cannot pass Value::None as argument".to_string()))
   }
 }
 
-impl From<&Type> for libffi::middle::Type 
+impl From<&Type> for libffi::middle::Type
 {
   /// Specifies the return value type so that libffi knows
   /// how many bytes to read after the call.
   #[inline]
-  fn from(t: &Type) -> Self 
+  fn from(t: &Type) -> Self
   {
-    match t 
+    match t
     {
       Type::None => Self::void(),
       Type::U8 => Self::u8(),
@@ -65,7 +158,7 @@ impl From<&Type> for libffi::middle::Type
 /// Keeps the arguments in the storage buffer,
 /// so that they are not removed from memory during the C call,
 /// and collects pointers to them.
-/// 
+///
 /// # Memory Lifetime Constraint:
 /// All heap allocations for string buffers (`RawString`, `CString`, `String`) 
 /// are strictly temporary (transient) and guaranteed to be valid ONLY for the duration 
@@ -74,14 +167,14 @@ impl From<&Type> for libffi::middle::Type
 /// the function execution, it must make its own deep copy (e.g., via `memcpy` or `strdup`).
 fn prepareFFIArgs<'a>(
   args: &'a [Value],
-  storage: &'a mut Vec<Box<dyn Any>>,
-) -> Result<Vec<Arg<'a>>, FFIError> 
+  storage: &'a mut Vec<Box<dyn Any>>
+) -> Result<Vec<Arg<'a>>, FFIError>
 {
   // Prepare storage for the values
   // that the arguments will reference.
-  for arg in args 
+  for arg in args
   {
-    match arg 
+    match arg
     {
       Value::U8(v) => storage.push(Box::new(*v)),
       Value::U16(v) => storage.push(Box::new(*v)),
@@ -117,15 +210,25 @@ fn prepareFFIArgs<'a>(
         let len: usize = vec.len();
         storage.push(Box::new((vec, pointer, len))); // Saving the length
       }
+      Value::Function(id) => {
+        let codePointer: *mut c_void = {
+          let reg: MutexGuard<RawMutex, FxHashMap<u64, CallbackEntry>> = registry().lock();
+          let entry: &CallbackEntry = reg
+            .get(id)
+            .ok_or_else(|| FFIError::Other(format!("callback {} not registered", id)))?;
+          entry.codePointer
+        };
+        storage.push(Box::new(codePointer));
+      }
       Value::None => return Err(FFIError::BadArgument("Cannot pass Value::None".to_string()))
     }
   }
 
   // Build the list of arguments for libffi
   let mut argsFfi: Vec<Arg<'a>> = Vec::with_capacity(args.len());
-  for (i, arg) in args.iter().enumerate() 
+  for (i, arg) in args.iter().enumerate()
   {
-    match arg 
+    match arg
     {
       Value::U8(_) => {
         let val: &u8 = downcastRef(&storage[i])?;
@@ -192,6 +295,10 @@ fn prepareFFIArgs<'a>(
         argsFfi.push(Arg::new(ptr));
         argsFfi.push(Arg::new(len));
       }
+      Value::Function { .. } => {
+        let ptr: &*mut c_void = downcastRef(&storage[i])?;
+        argsFfi.push(Arg::new(ptr));
+      }
       Value::None => return Err(FFIError::BadArgument("Cannot pass Value::None".to_string()))
     }
   }
@@ -202,9 +309,9 @@ fn prepareFFIArgs<'a>(
 /// Calls the C function by pointer
 /// and wraps the obtained raw result back into the Value enum.
 #[inline]
-fn invokeFFI(cif: &Cif, codePointer: CodePtr, argsFfi: &[Arg], ffiResultType: &Type) -> Value 
+fn invokeFFI(cif: &Cif, codePointer: CodePtr, argsFfi: &[Arg], ffiResultType: &Type) -> Value
 {
-  match ffiResultType 
+  match ffiResultType
   {
     Type::None => {
       unsafe { cif.call::<()>(codePointer, argsFfi) };
@@ -262,8 +369,8 @@ fn invokeFFI(cif: &Cif, codePointer: CodePtr, argsFfi: &[Arg], ffiResultType: &T
       let val: u8 = unsafe { cif.call::<u8>(codePointer, argsFfi) };
       Value::Bool(val != 0)
     }
-    Type::Pointer => 
-    { 
+    Type::Pointer =>
+    {
       let ptr: *mut c_void = unsafe { cif.call::<*mut c_void>(codePointer, argsFfi) };
       Value::Pointer(ptr as usize)
     }
@@ -280,38 +387,117 @@ fn downcastRef<T: 'static>(entry: &Box<dyn Any>) -> Result<&T, FFIError>
 
 // =================================================================================================
 
+/// Constructs a libffi `Cif` (Call Interface) defining the argument and return types.
+fn buildCif(argTypes: &[Type], returnType: &Type) -> Result<libffi::middle::Cif, FFIError>
+{
+  let mut argsTypes: Vec<libffi::middle::Type> = Vec::with_capacity(argTypes.len());
+  for t in argTypes {
+    argsTypes.push(libffi::middle::Type::from(t));
+  }
+  let returnType: libffi::middle::Type = libffi::middle::Type::from(returnType);
+  Ok(libffi::middle::Cif::new(argsTypes, returnType))
+}
+
+/// Safely reads a raw C pointer and converts it into a Rust `Value` based on the specified `Type`.
+const fn readArg(ptr: *const std::ffi::c_void, t: &Type) -> Value
+{
+  match t 
+  {
+    Type::None => Value::None,
+    Type::U8 => Value::U8(unsafe { *(ptr as *const u8) }),
+    Type::U16 => Value::U16(unsafe { *(ptr as *const u16) }),
+    Type::U32 => Value::U32(unsafe { *(ptr as *const u32) }),
+    Type::U64 => Value::U64(unsafe { *(ptr as *const u64) }),
+    Type::Usize => Value::Usize(unsafe { *(ptr as *const usize) }),
+    Type::I8 => Value::I8(unsafe { *(ptr as *const i8) }),
+    Type::I16 => Value::I16(unsafe { *(ptr as *const i16) }),
+    Type::I32 => Value::I32(unsafe { *(ptr as *const i32) }),
+    Type::I64 => Value::I64(unsafe { *(ptr as *const i64) }),
+    Type::Isize => Value::Isize(unsafe { *(ptr as *const isize) }),
+    Type::F32 => Value::F32(unsafe { *(ptr as *const f32) }),
+    Type::F64 => Value::F64(unsafe { *(ptr as *const f64) }),
+    Type::Bool => Value::Bool(unsafe { *(ptr as *const u8) != 0 }),
+    Type::Pointer => Value::Pointer(unsafe { *(ptr as *const usize) }),
+  }
+}
+
+/// Writes a Rust `Value` back into the raw C return pointer based on the expected `Type`.
+fn writeRet(ret: &mut std::ffi::c_void, value: Value, typ: &Type)
+{
+  match (typ, value) 
+  {
+    (Type::None, _) => {}
+    (Type::U8,  Value::U8(v))  => unsafe { *(ret as *mut std::ffi::c_void as *mut u8)  = v },
+    (Type::U16, Value::U16(v)) => unsafe { *(ret as *mut std::ffi::c_void as *mut u16) = v },
+    (Type::U32, Value::U32(v)) => unsafe { *(ret as *mut std::ffi::c_void as *mut u32) = v },
+    (Type::U64, Value::U64(v)) => unsafe { *(ret as *mut std::ffi::c_void as *mut u64) = v },
+    (Type::Usize, Value::Usize(v)) => unsafe { *(ret as *mut std::ffi::c_void as *mut usize) = v },
+    (Type::I8,  Value::I8(v))  => unsafe { *(ret as *mut std::ffi::c_void as *mut i8)  = v },
+    (Type::I16, Value::I16(v)) => unsafe { *(ret as *mut std::ffi::c_void as *mut i16) = v },
+    (Type::I32, Value::I32(v)) => unsafe { *(ret as *mut std::ffi::c_void as *mut i32) = v },
+    (Type::I64, Value::I64(v)) => unsafe { *(ret as *mut std::ffi::c_void as *mut i64) = v },
+    (Type::Isize, Value::Isize(v)) => unsafe { *(ret as *mut std::ffi::c_void as *mut isize) = v },
+    (Type::F32, Value::F32(v)) => unsafe { *(ret as *mut std::ffi::c_void as *mut f32) = v },
+    (Type::F64, Value::F64(v)) => unsafe { *(ret as *mut std::ffi::c_void as *mut f64) = v },
+    (Type::Bool, Value::Bool(v)) => unsafe { *(ret as *mut std::ffi::c_void as *mut u8) = if v { 1 } else { 0 } },
+    (Type::Pointer, Value::Pointer(v)) => unsafe { *(ret as *mut std::ffi::c_void as *mut usize) = v },
+    _ => {}
+  }
+}
+
+// =================================================================================================
+
 /// Dispatches an FFI request inside the zygote clone to the appropriate handler.
-pub(super) fn executeFFI(request: FFIRequest, cache: &mut FxHashMap<String, Library>) -> Result<Value, FFIError>
+pub(super) fn executeFFI(
+  request: FFIRequest,
+  cache: &mut FxHashMap<String, Library>
+) -> Result<Value, FFIError>
 {
   match request
   {
     FFIRequest::Call { libraryPath, functionName, args, resultType } =>
       executeCall(libraryPath, functionName, args, resultType, cache),
 
-    FFIRequest::Alloc { length } => unsafe {
-      let ptr: *mut c_void = libc::malloc(length);
+    FFIRequest::Alloc { length } => {
+      let ptr: *mut c_void = unsafe{ libc::malloc(length) };
       if ptr.is_null() { return Err(FFIError::Other("malloc returned null".to_string())); }
       Ok(Value::Pointer(ptr as usize))
     },
 
-    FFIRequest::Free { pointer } => unsafe {
-      libc::free(pointer as *mut c_void);
+    FFIRequest::Free { pointer } => {
+      unsafe{ libc::free(pointer as *mut c_void) };
       Ok(Value::None)
     }
 
-    FFIRequest::ReadMemory { pointer, length } => unsafe {
+    FFIRequest::ReadMemory { pointer, length } => {
       if pointer == 0 { return Err(FFIError::BadArgument("null pointer".to_string())); }
-      let slice: &[u8] = std::slice::from_raw_parts(pointer as *const u8, length);
+      let slice: &[u8] = unsafe{ std::slice::from_raw_parts(pointer as *const u8, length) };
       Ok(Value::RawString(slice.to_vec()))
     },
 
-    FFIRequest::WriteMemory { pointer, value } => unsafe {
+    FFIRequest::WriteMemory { pointer, value } => {
       if pointer == 0 { return Err(FFIError::BadArgument("null pointer".to_string())); }
       let bytes: &[u8] = match &value {
         Value::RawString(v) | Value::CString(v) => v.as_slice(),
         _ => return Err(FFIError::BadArgument("expected RawString or CString for WriteMemory".to_string())),
       };
-      std::ptr::copy_nonoverlapping(bytes.as_ptr(), pointer as *mut u8, bytes.len());
+      unsafe{ std::ptr::copy_nonoverlapping(bytes.as_ptr(), pointer as *mut u8, bytes.len()) };
+      Ok(Value::None)
+    }
+
+    FFIRequest::RegisterCallback { id, bytes, argTypes, returnType } => {
+      let wrapper: Box<dyn Callable<Vec<Value>, Value>> = callback::decode(&bytes)
+        .map_err(|e| FFIError::Other(format!("call decode failed: {e}")))?;
+      let cif: Cif = buildCif(&argTypes, &returnType)?;
+      let leaked: &mut CallbackWrapper = Box::leak(Box::new(CallbackWrapper {
+        closure: wrapper,
+        argTypes,
+        returnType: Box::new(returnType)
+      }));
+      let closure: Closure = Closure::new(cif, trampoline, leaked);
+      let codeAddr: usize = *closure.code_ptr() as usize;
+      let codePointer: *mut c_void = codeAddr as *mut c_void;
+      registry().lock().insert(id, CallbackEntry { closure, codePointer });
       Ok(Value::None)
     }
   }
@@ -377,7 +563,15 @@ fn executeCall(
   let codePointer: CodePtr = CodePtr(functionPointer);
   let ffiResult: Value = invokeFFI(&cif, codePointer, &argsFfi, &ffiResultType);
 
-  //
+  // A registered callback may have panicked mid-call (see `trampoline` +
+  // `CallbackPanicked`) — the C function still "completed" and ffiResult is
+  // whatever came out of that, but at least one comparison/predicate/etc.
+  // ran on a default value instead of the real one. Don't hand back a
+  // result the caller would trust as correct.
+  if CallbackPanicked.with(|f| f.replace(false)) {
+    return Err(FFIError::Other("a registered callback panicked during the call".to_string()));
+  }
+
   Ok(ffiResult)
 }
 

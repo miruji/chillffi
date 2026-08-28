@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Value
 {
-  /// Just an empty value
+  /// Just an empty value.
   None,
   
   //
@@ -60,7 +60,13 @@ pub enum Value
   CString(Vec<u8>),
 
   /// In C code, one would expect `const char *str, size_t len`.
-  String(Vec<u8>)
+  String(Vec<u8>),
+
+  /// Represents a Rust closure passed to C as a function pointer.
+  ///
+  /// The `u64` holds the unique ID used to locate the JIT-compiled trampoline 
+  /// inside the clone's callback registry.
+  Function(u64)
 }
 
 // =================================================================================================
@@ -69,10 +75,10 @@ pub enum Value
 /// for defining FFI arguments and result.
 ///
 /// todo: add unit tests for Type variants verification
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Type
 {
-  /// Just an empty value
+  /// Just an empty value.
   None,
   
   //
@@ -96,7 +102,7 @@ pub enum Type
   //
   Bool,
   
-  /// Raw pointer
+  /// Raw pointer.
   Pointer
 }
 
@@ -117,7 +123,7 @@ pub trait Primitive: Sized
   fn toValue(self) -> Value;
 }
 
-/// Объявляет связку примитива и `Value` типа.
+/// Declares a binding between a primitive and a `Value` type.
 macro_rules! implFFIPrimitive
 {
   ($rustType:ty, $variant:ident) =>
@@ -147,7 +153,7 @@ macro_rules! implFFIPrimitive
   };
 }
 
-// Объявление всех примитивных типов
+// Declaration of all primitive types
 implFFIPrimitive!(u8, U8);
 implFFIPrimitive!(u16, U16);
 implFFIPrimitive!(u32, U32);
@@ -169,8 +175,9 @@ impl Primitive for Pointer
   /// Extracts the address from a `Value::Pointer`.
   fn fromValue(value: Value) -> Result<Self, FFIError>
   {
-    match value {
-      Value::Pointer(addr) => Ok(Pointer(addr)),
+    match value 
+    {
+      Value::Pointer(addr) => Ok(Self(addr)),
       _ => Err(FFIError::Other(format!("expected Pointer, got {:?}", value))),
     }
   }
@@ -205,7 +212,7 @@ impl From<Pointer> for usize
 impl From<Pointer> for Value
 {
   /// Converts a `Pointer` directly into a `Value::Pointer` variant.
-  fn from(p: Pointer) -> Self { Value::Pointer(p.0) }
+  fn from(p: Pointer) -> Self { Self::Pointer(p.0) }
 }
 
 // =================================================================================================
@@ -306,7 +313,8 @@ mod tests
 
   // ===============================================================================================
 
-  /// Checks pointer type handling: passing a valid pointer and receiving NULL for a missing variable.
+  /// Checks pointer type handling: passing a valid pointer 
+  /// and receiving NULL for a missing variable.
   #[test]
   fn pointer() -> ()
   {

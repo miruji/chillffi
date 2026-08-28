@@ -2,8 +2,8 @@
 
 **A simple isolated dynamic FFI framework for Rust**
 
-<!-- [![Crates.io](https://img.shields.io/crates/v/chillffi.svg)](https://crates.io/crates/chillffi) -->
-<!-- [![Documentation](https://docs.rs/chillffi/badge.svg)](https://docs.rs/chillffi) -->
+[![Crates.io](https://img.shields.io/crates/v/chillffi.svg)](https://crates.io/crates/chillffi)
+[![Documentation](https://docs.rs/chillffi/badge.svg)](https://docs.rs/chillffi)
 [![License: FCL](https://img.shields.io/badge/License-FCL-blue.svg)](LICENSE.md)
 
 `chillffi` allows dynamically loading C libraries `.so` 
@@ -127,7 +127,7 @@ This is also different from the WASM approach - because we preserve a true nativ
 3. Data and descriptors are transferred through a secure socket channel in memory.
 4. In case of errors, the supervisor intercepts the worker crash and returns the error to Rust, keeping your application stable.
 
-<!-- ## 🧭 Roadmap -->
+<!-- ## 🧭 Roadmap (todo better about capabilities) -->
 
 ## 📄 License
 

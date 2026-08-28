@@ -1,3 +1,6 @@
+use parking_lot::MutexGuard;
+use parking_lot::Mutex;
+use std::sync::OnceLock;
 use crate::ffi::errors::FFIError;
 use std::cell::RefCell;
 use std::env;
@@ -6,7 +9,6 @@ use std::os::unix::net::{UnixStream};
 use std::os::fd::{AsRawFd, FromRawFd, RawFd, OwnedFd};
 use std::path::PathBuf;
 use std::process::{Command, Child, Stdio};
-use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::thread;
 use bincode::config::Configuration;
 use fxhash::FxHashMap;
@@ -41,8 +43,8 @@ use crate::worker::executeFFI;
 /// this is not the runtime, but the zygote process.
 pub(super) const ZygoteFlag: &str = "__zygote";
 
-/// Request for FFI execution, sent entirely to the zygote
-#[derive(Serialize, Deserialize)]
+/// Request for FFI execution, sent entirely to the zygote.
+#[derive(Debug, Serialize, Deserialize)]
 pub(super) enum FFIRequest
 {
   /// Calls a function from a dynamic library with the given arguments and expected return type.
@@ -56,10 +58,13 @@ pub(super) enum FFIRequest
   /// Reads a raw memory block of the given length starting at the specified pointer.
   ReadMemory { pointer: usize, length: usize },
   /// Writes a value to the specified address in the zygote memory.
-  WriteMemory { pointer: usize, value: Value }
+  WriteMemory { pointer: usize, value: Value },
+
+  /// Parent sends a serialized closure; the clone deserializes and stores it.
+  RegisterCallback { id: u64, bytes: Vec<u8>, argTypes: Vec<Type>, returnType: Type }
 }
 
-/// Response to the request with the execution result or error
+/// Response to the request with the execution result or error.
 #[derive(Serialize, Deserialize)]
 pub(super) enum FFIResponse
 {
@@ -69,37 +74,36 @@ pub(super) enum FFIResponse
   Err(FFIError)
 }
 
-/// Controls the zygote process and 
-/// the communication channel with it.
+/// Controls the zygote process and the communication channel with it.
 pub(super) struct ZygoteHandle
 {
-  /// Child zygote process
+  /// Child zygote process.
   process: Child,
-  /// Socket for exchanging requests 
-  /// and responses with the process.
+  /// Socket for exchanging requests and responses with the process.
   pub(super) socket: UnixStream
 }
 
 impl Drop for ZygoteHandle
 {
-  /// Terminates the zygote process and removes the temporary socket
+  /// Terminates the zygote process and removes the temporary socket.
   fn drop(&mut self) -> ()
   {
     let _ = self.process.kill();
   }
 }
 
-/// Global state of the active zygote with synchronized access
+/// Global state of the active zygote with synchronized access.
 pub(super) static ZygoteState: OnceLock<Mutex<ZygoteHandle>> = OnceLock::new();
 
 // =================================================================================================
 
-/// RAII handle for a separate zygote clone process
+/// RAII handle for a separate zygote clone process.
 pub struct ClonedZygote 
 {
-  /// Process PID
+  /// Process PID.
   pub pid: libc::pid_t,
-  /// Socket for exchanging requests
+  
+  /// Socket for exchanging requests.
   pub socket: UnixStream
 }
 
@@ -110,8 +114,7 @@ impl ClonedZygote
   {
     let mutex: &Mutex<ZygoteHandle> = ZygoteState.get()
       .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Zygote not initialized"))?;
-    let mut guard: MutexGuard<ZygoteHandle> = mutex.lock()
-      .map_err(|_| io::Error::other("Zygote mutex poisoned"))?;
+    let mut guard: MutexGuard<ZygoteHandle> = mutex.lock();
 
     // Sends a signal to create a clone
     writeMessage(&mut guard.socket, &[1u8])?;
@@ -123,20 +126,24 @@ impl ClonedZygote
 
     // Read the socket descriptor directly from RAM
     let fd: RawFd = recvFd(&mut guard.socket)?;
-    let socket: UnixStream = unsafe { UnixStream::from_raw_fd(fd) };
+    let socket: UnixStream = unsafe{ UnixStream::from_raw_fd(fd) };
 
     drop(guard);
     Ok(Self { pid, socket })
   }
 
-  /// FFI call inside a specific clone
+  /// FFI call inside a specific clone.
   pub(super) fn call(&mut self, request: FFIRequest) -> Result<FFIResponse, String>
   {
     let bytes: Vec<u8> = encode(&request).map_err(|e| e.to_string())?;
-    let responseBytes: Vec<u8> = sendAndReceive(&mut self.socket, &bytes)
+    writeMessage(&mut self.socket, &bytes)
       .map_err(|e| format!("Zygote clone IPC failed: {}", e))?;
 
-    decode(&responseBytes).map_err(|e| e.to_string())
+    let responseBytes: Vec<u8> = readMessage(&mut self.socket)
+      .map_err(|e| format!("Zygote clone IPC failed: {}", e))?;
+    let response: FFIResponse = decode(&responseBytes).map_err(|e| e.to_string())?;
+
+    Ok(response)
   }
 }
 
@@ -146,9 +153,7 @@ impl Drop for ClonedZygote
   /// the main zygote is not affected.
   fn drop(&mut self) -> ()
   {
-    unsafe {
-      libc::kill(self.pid, libc::SIGKILL);
-    }
+    unsafe{ libc::kill(self.pid, libc::SIGKILL); }
   }
 }
 
@@ -189,13 +194,15 @@ impl Drop for ZygoteGuard
 // =================================================================================================
 
 /// Entry point of the child Zygote process;
+/// 
 /// main() must call this as the first line if the first argument == ZygoteFlag;
+/// 
 /// The process is spawned through Command (fork+exec) — runtime was not warmed up,
 /// there are no extra tasks, there is no metadata heap. The library is not loaded in advance.
 pub (super) fn runAsZygote() -> !
 {
   // Take the socket directly from STDIN
-  let socket: UnixStream = unsafe { UnixStream::from_raw_fd(libc::STDIN_FILENO) };
+  let socket: UnixStream = unsafe{ UnixStream::from_raw_fd(libc::STDIN_FILENO) };
   zygoteLoop(socket);
 }
 
@@ -211,6 +218,7 @@ pub(super) fn initZygote() -> io::Result<()>
 }
 
 /// The zygote is spawned only through Command (fork+exec) at startup.
+/// 
 /// This is fundamental: a regular fork() from an already warmed-up multithreaded runtime
 /// (the supervisor is a separate thread) would inherit other mutexes in a locked state —
 /// which would create a deadlock trap.
@@ -250,7 +258,7 @@ fn zygoteLoop(mut socket: UnixStream) -> !
   // This must not be written in the main runtime: there, waitpid 
   // in supervisorLoop() tracks the Zygote process itself,
   // and with SIG_IGN it will fail with ECHILD and enter guaranteed CPU load.
-  unsafe { libc::signal(libc::SIGCHLD, libc::SIG_IGN); }
+  unsafe{ libc::signal(libc::SIGCHLD, libc::SIG_IGN); }
 
   //
   loop 
@@ -269,7 +277,7 @@ fn zygoteLoop(mut socket: UnixStream) -> !
       }
     };
 
-    match unsafe { libc::fork() } 
+    match unsafe{ libc::fork() } 
     {
       -1 => {
         let _ = writeMessage(&mut socket, &0i32.to_le_bytes());
@@ -291,7 +299,7 @@ fn zygoteLoop(mut socket: UnixStream) -> !
   }
 }
 
-/// Personal clone loop
+/// Personal clone loop.
 fn cloneLoop(mut socket: UnixStream) -> ! 
 {
   let mut libraryCache: FxHashMap<String, Library> = FxHashMap::default();
@@ -323,25 +331,18 @@ fn cloneLoop(mut socket: UnixStream) -> !
 /// Returns the execution result or an error description.
 fn handleRequest(requestBytes: &[u8], cache: &mut FxHashMap<String, Library>) -> FFIResponse
 {
-  match decode::<FFIRequest>(requestBytes)
+  match decode::<FFIRequest>(requestBytes) 
   {
-    Ok(request) => match executeFFI(request, cache)
+    Ok(request) => match executeFFI(request, cache) 
     {
-      Ok(value) => FFIResponse::Ok(value),
-      Err(e) => FFIResponse::Err(e)
+      Ok(v) => FFIResponse::Ok(v),
+      Err(e) => FFIResponse::Err(e),
     },
-    Err(e) => FFIResponse::Err(e)
+    Err(e) => FFIResponse::Err(e),
   }
 }
 
 // =================================================================================================
-
-/// Sends a message through the socket and waits for a response.
-pub(super) fn sendAndReceive(socket: &mut UnixStream, bytes: &[u8]) -> io::Result<Vec<u8>>
-{
-  writeMessage(socket, bytes)?;
-  readMessage(socket)
-}
 
 /// Supervisor: blocks on the death of the current zygote (waitpid) and recreates it.
 /// 
@@ -352,12 +353,12 @@ fn supervisorLoop() -> ()
   {
     let pidToWait: u32 = {
       let mutex: &Mutex<ZygoteHandle> = match ZygoteState.get() { Some(m) => m, None => return };
-      mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).process.id()
+      mutex.lock().process.id()
     };
-    unsafe { libc::waitpid(pidToWait as libc::pid_t, std::ptr::null_mut(), 0); }
+    unsafe{ libc::waitpid(pidToWait as libc::pid_t, std::ptr::null_mut(), 0); }
 
     let mutex: &Mutex<ZygoteHandle> = ZygoteState.get().unwrap();
-    let mut guard: MutexGuard<ZygoteHandle> = mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut guard: MutexGuard<ZygoteHandle> = mutex.lock();
     if guard.process.id() == pidToWait // Not recreated in parallel yet through call()
     {
       match spawnZygote()
@@ -372,14 +373,14 @@ fn supervisorLoop() -> ()
 
 // =================================================================================================
 
-/// Writes a message to the socket with the data size prepended
+/// Writes a message to the socket with the data size prepended.
 fn writeMessage(socket: &mut UnixStream, data: &[u8]) -> io::Result<()>
 {
   socket.write_all(&(data.len() as u32).to_le_bytes())?;
   socket.write_all(data)
 }
 
-/// Reads a message from the socket using the length specified in the header
+/// Reads a message from the socket using the length specified in the header.
 fn readMessage(socket: &mut UnixStream) -> io::Result<Vec<u8>>
 {
   let mut lengthBuffer: [u8; 4] = [0u8; 4];
@@ -389,14 +390,15 @@ fn readMessage(socket: &mut UnixStream) -> io::Result<Vec<u8>>
   Ok(buffer)
 }
 
-/// Serializes a value into a byte representation
+/// Serializes a value into a byte representation.
 pub(super) fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, FFIError>
 {
   let config: Configuration = bincode::config::standard();
   bincode::serde::encode_to_vec(value, config)
     .map_err(|e| FFIError::EncodeFailed(format!("Encode failed: {}", e)))
 }
-/// Deserializes a byte representation back into a value
+
+/// Deserializes a byte representation back into a value.
 pub(super) fn decode<T: for<'a> Deserialize<'a>>(bytes: &[u8]) -> Result<T, FFIError>
 {
   let config: Configuration = bincode::config::standard();
@@ -408,7 +410,7 @@ pub(super) fn decode<T: for<'a> Deserialize<'a>>(bytes: &[u8]) -> Result<T, FFIE
 // =================================================================================================
 
 /// Sends the socket descriptor to 
-/// another process through an anonymous channel
+/// another process through an anonymous channel.
 fn sendFd(socket: &mut UnixStream, fd: RawFd) -> io::Result<()> 
 {
   // According to the POSIX standard, 
@@ -447,7 +449,7 @@ fn sendFd(socket: &mut UnixStream, fd: RawFd) -> io::Result<()>
 }
 
 /// Receives the socket descriptor directly 
-/// from the memory of another process
+/// from the memory of another process.
 fn recvFd(socket: &mut UnixStream) -> io::Result<RawFd> 
 {
   // Prepare buffers to receive the dummy byte and the ancillary header

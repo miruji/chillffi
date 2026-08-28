@@ -1,16 +1,16 @@
+use std::cell::RefMut;
 use crate::ffi::value::Primitive;
 use parking_lot::RwLockReadGuard;
 use parking_lot::RwLock;
 use crate::pathResolver::resolveGlobal;
 use crate::ffi::scope;
-use std::cell::RefMut;
 use crate::ffi::errors::FFIError;
 use fxhash::FxHashMap;
-use crate::zygote::ClonedZygote;
 use crate::zygote::ZygoteState;
 use crate::ffi::value::{Type, Value};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{OnceLock};
+use crate::__ffiInternal::ClonedZygote;
 use crate::zygote::{FFIRequest, FFIResponse, ZygoteStack};
 // =================================================================================================
 
@@ -42,7 +42,6 @@ fn registerLibrary(id: usize, path: &str) -> ()
 
 /// Removes a library from the registry by its identifier.
 #[inline]
-
 fn unregisterLibrary(id: usize) -> ()
 {
   getRegistry().write().remove(&id);
@@ -59,17 +58,11 @@ pub(super) fn sendRawRequest(request: FFIRequest) -> Result<Value, FFIError>
     //  But in callById it is better to check it immediately.
     return Err(FFIError::ZygoteNotInitialized);
   }
-  
-  // Search for the active clone in the local stack of the current thread
+
   ZygoteStack.with(|stack| {
     let mut mutStack: RefMut<Vec<ClonedZygote>> = stack.borrow_mut();
+    let zygote: &mut ClonedZygote = mutStack.last_mut().ok_or(FFIError::NoActiveZygoteScope)?;
 
-    // If the stack is empty — it means the call is being made outside the context of ffi!{}
-    let zygote: &mut ClonedZygote = mutStack
-      .last_mut()
-      .ok_or(FFIError::NoActiveZygoteScope)?;
-
-    // Execute the FFI request through the current zygote
     match zygote.call(request) {
       Ok(FFIResponse::Ok(val)) => Ok(val),
       Ok(FFIResponse::Err(err)) => Err(err),
@@ -139,8 +132,8 @@ impl<const Allowed: bool> Drop for __Library<Allowed>
 impl __Library<true>
 {
   /// Executes a function call from the loaded library.
-  /// 
-  /// todo Должен быть полностью скрыт и не работать напрямую
+  ///
+  /// todo It should be completely hidden and not work directly
   #[doc(hidden)]
   pub fn call<T: Primitive>(&self, functionName: &str, args: Vec<Value>) -> Result<T, FFIError>
   {
@@ -148,9 +141,9 @@ impl __Library<true>
     T::fromValue(raw)
   }
 
-  /// Fire-and-forget вариант: вызов без ожидания и типизации результата.
+  /// Fire-and-forget variant: a call without waiting for or typing the result.
   ///
-  /// todo Должен быть полностью скрыт и не работать напрямую
+  /// todo It should be completely hidden and not work directly
   #[doc(hidden)]
   pub fn callv(&self, functionName: &str, args: Vec<Value>) -> Result<(), FFIError>
   {
@@ -207,8 +200,8 @@ macro_rules! callv {
   };
 }
 
-// Варианта с `let a = call!(` нет. Потому что ты либо void ждешь, либо указываешь тип.
-// Было бы грубо делать иное указание типа, если ты можешь это сделать сразу в `let a:`.
+// There is no variant with `let a = call!(`. Because you either expect void, or specify the type.
+// It would be rough to require a different type specification if you can do it directly in `let a:`.
 
 // =================================================================================================
 

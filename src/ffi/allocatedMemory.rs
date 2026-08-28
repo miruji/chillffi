@@ -41,22 +41,31 @@ impl<'g> AllocatedMemory<'g>
   }
 
   /// Returns the raw memory address of the allocation.
-  pub const fn address(&self) -> usize { self.address }
+  pub const fn address(&self) -> usize 
+  {
+    self.address
+  }
   /// Returns the size of the allocated memory block in bytes.
-  pub const fn length(&self) -> usize { self.length }
+  pub const fn length(&self) -> usize 
+  {
+    self.length
+  }
 
   /// Wraps the address into a Value::Pointer for FFI calls.
-  pub const fn asPointer(&self) -> Value {
+  pub const fn asPointer(&self) -> Value 
+  {
     Value::Pointer(self.address)
   }
 
   /// Reads the entire allocated memory block from the zygote.
-  pub fn read(&self) -> Result<Value, FFIError> {
+  pub fn read(&self) -> Result<Value, FFIError> 
+  {
     sendRawRequest(FFIRequest::ReadMemory { pointer: self.address, length: self.length })
   }
 
   /// Writes a value into the allocated memory block in the zygote.
-  pub fn write(&self, value: Value) -> Result<(), FFIError> {
+  pub fn write(&self, value: Value) -> Result<(), FFIError> 
+  {
     sendRawRequest(FFIRequest::WriteMemory { pointer: self.address, value })?;
     Ok(())
   }
@@ -65,7 +74,7 @@ impl<'g> AllocatedMemory<'g>
 impl<'g> Drop for AllocatedMemory<'g>
 {
   /// Automatically frees the allocated memory in the zygote on scope exit.
-  fn drop(&mut self) 
+  fn drop(&mut self) -> ()
   {
     if self.address != 0 {
       let _ = sendRawRequest(FFIRequest::Free { pointer: self.address });
@@ -131,7 +140,8 @@ mod tests
   fn drop() -> ()
   {
     let (addr1, addr2): (usize, usize) = ffi!(|scope| {
-      let addr1: usize = {
+      let addr1: usize = 
+      {
         let mem: AllocatedMemory = scope.alloc(16)?;
         let a: usize = mem.address();
         // mem is dropped here, sending Free

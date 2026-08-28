@@ -5,6 +5,7 @@ use chillffi::ffi::errors::FFIError;
 use chillffi::ffi;
 // =================================================================================================
 
+/// Print custom message via libc's puts
 fn println(text: &str) -> Result<(), FFIError>
 {
   ffi!(|scope| {
@@ -14,6 +15,7 @@ fn println(text: &str) -> Result<(), FFIError>
     let mut bytes: Vec<u8> = text.as_bytes().to_vec();
     bytes.push(0);
 
+    // Allocate memory and write null-terminated string bytes
     let mem: AllocatedMemory = scope.alloc(bytes.len())?;
     mem.write(Value::RawString(bytes))?;
 
@@ -26,8 +28,8 @@ fn println(text: &str) -> Result<(), FFIError>
 
 fn main() -> ()
 {
-  // Test: Print custom message via libc's puts
-  println("Hello from libc via chillffi!").expect("Failed to print via libc");
+  println("Hello from libc via chillffi!")
+    .expect("Failed to print via libc");
 }
 
 // =================================================================================================

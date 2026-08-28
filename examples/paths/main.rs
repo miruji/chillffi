@@ -5,6 +5,8 @@ use chillffi::call;
 use chillffi::ffi;
 // =================================================================================================
 
+/// Test library resolution using direct paths, 
+/// scope search paths, and global search paths
 fn main() -> ()
 {
   testRawPath();
