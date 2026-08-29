@@ -61,7 +61,9 @@ pub(super) enum FFIRequest
   WriteMemory { pointer: usize, value: Value },
 
   /// Parent sends a serialized closure; the clone deserializes and stores it.
-  RegisterCallback { id: u64, bytes: Vec<u8>, argTypes: Vec<Type>, returnType: Type }
+  RegisterCallback { id: u64, bytes: Vec<u8>, argTypes: Vec<Type>, returnType: Type },
+  /// todo desc
+  CallPointer { pointer: usize, args: Vec<Value>, resultType: Type }
 }
 
 /// Response to the request with the execution result or error.

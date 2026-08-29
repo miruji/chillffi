@@ -35,7 +35,8 @@ fn main() -> ()
     // Empty capture list — the comparator takes nothing from the outer scope,
     // only its `args` parameter. If a capture was needed (e.g.,
     // `threshold`), the list would look like `callback!([threshold: i32] |args| ...)`.
-    let compar = callback!([] |args: Vec<Value>| -> Value {
+    let compar = callback!([] |args: Vec<Value>| -> Value 
+    {
       let a: usize = match args[0] {
           Value::Pointer(a) => a,
           _ => panic!("expected Pointer for arg 0"),

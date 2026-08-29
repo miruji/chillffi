@@ -50,7 +50,7 @@ unsafe impl Send for CallbackEntry {}
 /// Global map storing registered JIT-compiled callbacks by their unique IDs.
 static CallbackRegistry: OnceLock<Mutex<FxHashMap<u64, CallbackEntry>>> = OnceLock::new();
 
-thread_local! {
+thread_local!{
   /// Set by `trampoline` if the user's closure panics mid-call.
   ///
   /// Panics cannot propagate through C stack frames. `catch_unwind` traps it, 
@@ -371,7 +371,7 @@ fn invokeFFI(cif: &Cif, codePointer: CodePtr, argsFfi: &[Arg], ffiResultType: &T
     }
     Type::Pointer =>
     {
-      let ptr: *mut c_void = unsafe { cif.call::<*mut c_void>(codePointer, argsFfi) };
+      let ptr: *mut c_void = unsafe{ cif.call::<*mut c_void>(codePointer, argsFfi) };
       Value::Pointer(ptr as usize)
     }
   }
@@ -422,9 +422,9 @@ const fn readArg(ptr: *const std::ffi::c_void, t: &Type) -> Value
 }
 
 /// Writes a Rust `Value` back into the raw C return pointer based on the expected `Type`.
-fn writeRet(ret: &mut std::ffi::c_void, value: Value, typ: &Type)
+fn writeRet(ret: &mut std::ffi::c_void, value: Value, t: &Type)
 {
-  match (typ, value) 
+  match (t, value) 
   {
     (Type::None, _) => {}
     (Type::U8,  Value::U8(v))  => unsafe { *(ret as *mut std::ffi::c_void as *mut u8)  = v },
@@ -457,6 +457,9 @@ pub(super) fn executeFFI(
   {
     FFIRequest::Call { libraryPath, functionName, args, resultType } =>
       executeCall(libraryPath, functionName, args, resultType, cache),
+
+    FFIRequest::CallPointer { pointer, args, resultType } =>
+      executeCallPointer(pointer, args, resultType),
 
     FFIRequest::Alloc { length } => {
       let ptr: *mut c_void = unsafe{ libc::malloc(length) };
@@ -543,6 +546,43 @@ fn executeCall(
       .map_err(|_| FFIError::SymbolNotFound { functionName: functionName.clone() })?
   };
 
+  invokeAtPointer(functionPointer as usize, args, ffiResultType)
+}
+
+/// Calls a raw function pointer directly — no `dlopen`/`dlsym`, the address
+/// is already known (typically a pointer previously *returned* by another
+/// FFI call, e.g. `signal()`'s return value, or a pointer read out of a
+/// dispatch table). Only meaningful within the same clone the pointer came
+/// from — same rules as `Value::Pointer`'s own lifetime.
+fn executeCallPointer(
+  pointer: usize,
+  args: Vec<Value>,
+  ffiResultType: Type
+) -> Result<Value, FFIError>
+{
+  if pointer == 0 {
+    return Err(FFIError::BadArgument("null function pointer".to_string()));
+  }
+
+  invokeAtPointer(pointer, args, ffiResultType)
+}
+
+/// Shared by `executeCall` (address resolved via `dlsym`) and
+/// `executeCallPointer` (a raw address handed to us directly) — everything
+/// past "we have a code address" is identical either way.
+fn invokeAtPointer(
+  pointer: usize,
+  args: Vec<Value>,
+  ffiResultType: Type
+) -> Result<Value, FFIError>
+{
+  // Check arguments for the presence of Value::None before building C ABI types
+  for (index, arg) in args.iter().enumerate() {
+    if matches!(arg, Value::None) {
+      return Err(FFIError::BadArgument(format!("Cannot pass Value::None as argument at index {}", index)));
+    }
+  }
+
   // Build argument types for CIF
   let mut argsTypes: Vec<libffi::middle::Type> = Vec::new();
   for arg in &args {
@@ -560,7 +600,7 @@ fn executeCall(
   let argsFfi: Vec<Arg> = prepareFFIArgs(&args, &mut storage)?;
 
   // Function call
-  let codePointer: CodePtr = CodePtr(functionPointer);
+  let codePointer: CodePtr = CodePtr(pointer as *mut c_void);
   let ffiResult: Value = invokeFFI(&cif, codePointer, &argsFfi, &ffiResultType);
 
   // A registered callback may have panicked mid-call (see `trampoline` +
