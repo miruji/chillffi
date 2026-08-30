@@ -123,8 +123,9 @@ pub(super) struct Envelope
   pub bytes: Vec<u8>
 }
 
-/// A concrete closure produced by [`callback!`], still on the originating
-/// side. Call it directly with [`Sendable::call`] — no process boundary
+/// A concrete closure produced by [`ccallback!`], still on the originating side.
+/// 
+/// Call it directly with [`Sendable::call`] — no process boundary
 /// involved — or [`Sendable::encode`] it to send across the zygote fork.
 pub struct Sendable<Args, Output, T: Callable<Args, Output> + Serialize>
 {
@@ -192,11 +193,11 @@ pub fn decode<Args: 'static, Output: 'static>(bytes: &[u8]) -> Result<Box<dyn Ca
   // `fn` item pointer in this exact executable, transmitted, and resolved back.
   //
   // Soundness relies strictly on both processes running the identical binary file
-  // (chillffi's zygote guarantees this via re-exec of `current_exe()`). 
+  // (zygote guarantees this via re-exec of `current_exe()`). 
   //
-  // As a second line of defense, the target function re-checks `siteTag` 
-  
+  // As a second line of defense, the target function re-checks `siteTag`
   // before any deserialization occurs.
+  
   let decodeFn: DecodeFn<Args, Output> = unsafe{ std::mem::transmute(absoluteAddr) };
   decodeFn(envelope.siteTag, &envelope.bytes)
 }
@@ -221,6 +222,7 @@ macro_rules! callback
 
       impl $crate::ffi::callback::Callable<$argTy, $retTy> for __CallImpl
       {
+        /// todo desc
         fn call(&self, $arg: $argTy) -> $retTy
         {
           $( let $name: $ty = self.$name.clone(); )*
@@ -228,26 +230,31 @@ macro_rules! callback
         }
       }
 
-      // Monomorphic, address-taken `fn` item — this address (relative to the
-      // module base) is what actually crosses the wire; see `Sendable::new`
-      // below. Checks its own site tag first, so a resolution that landed
-      // here by mistake (only possible if the two processes are somehow not
-      // the same binary) fails cleanly instead of deserializing garbage.
+      /// Monomorphic, address-taken `fn` item — this address (relative to the
+      /// module base) is what actually crosses the wire; see `Sendable::new`.
+      /// 
+      /// Checks its own site tag first, so a resolution that landed
+      /// here by mistake (only possible if the two processes are somehow not
+      /// the same binary) fails cleanly instead of deserializing garbage.
       fn __callDecode(siteTag: u64, bytes: &[u8]) -> ::std::result::Result<
         ::std::boxed::Box<dyn $crate::ffi::callback::Callable<$argTy, $retTy>>,
         $crate::ffi::callback::CallError
       >
       {
+        // todo desc
         let expected: u64 = $crate::ffi::callback::tagOf(::std::concat!(::std::file!(), ":", ::std::line!(), ":", ::std::column!()));
         if siteTag != expected {
           return ::std::result::Result::Err($crate::ffi::callback::CallError::TypeMismatch { tag: siteTag });
         }
+        
+        // todo desc
         let (concrete, _): (__CallImpl, usize) = $crate::ffi::callback::__reexport::bincode::serde::decode_from_slice(
           bytes, $crate::ffi::callback::__reexport::bincode::config::standard()
         ).map_err(|e| $crate::ffi::callback::CallError::Decode(::std::string::ToString::to_string(&e)))?;
         ::std::result::Result::Ok(::std::boxed::Box::new(concrete))
       }
 
+      // todo desc
       let siteTag: u64 = $crate::ffi::callback::tagOf(::std::concat!(::std::file!(), ":", ::std::line!(), ":", ::std::column!()));
       let relativeOffset: usize = $crate::ffi::callback::relativeOffsetOf(__callDecode as usize);
 

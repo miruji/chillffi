@@ -63,9 +63,9 @@ pub(super) fn resolveViaScope(name: &str) -> Option<String>
 
 // =================================================================================================
 
-/// A handle to the ScopeGuard of the current ffi!{}-block — borrows it for 'g.
+/// A handle to the ScopeGuard of the current [`ffi!`]-block — borrows it for 'g.
 ///
-/// That is precisely why AllocatedMemory<'g> cannot leave the block: the ScopeGuard,
+/// That is precisely why [`AllocatedMemory<'g>`] cannot leave the block: the ScopeGuard,
 /// which it borrows, is dropped at the boundary of the block, and this is checked by the compiler.
 pub struct Scope<'g>
 {
@@ -141,17 +141,31 @@ impl<'g> Scope<'g>
 
   // ===============================================================================================
 
+  /// Reads a dynamically-typed C struct at `pointer`, shaped by `fields`.
+  pub fn readDynamicStruct(pointer: impl Into<usize>, fields: &[Type]) -> Result<Vec<Value>, FFIError>
+  {
+    match sendRawRequest(FFIRequest::ReadDynamicStruct { pointer: pointer.into(), fields: fields.to_vec() })? {
+      Value::Struct(values) => Ok(values),
+      other => Err(FFIError::Other(format!("ReadDynamicStruct: expected Value::Struct, got {:?}", other))),
+    }
+  }
+
+  /// Writes `values` into a dynamically-typed C struct at `pointer`.
+  pub fn writeDynamicStruct(pointer: impl Into<usize>, fields: &[Type], values: &[Value]) -> Result<(), FFIError>
+  {
+    sendRawRequest(FFIRequest::WriteDynamicStruct {
+      pointer: pointer.into(), fields: fields.to_vec(), values: values.to_vec()
+    })?;
+    Ok(())
+  }
+
+  // ===============================================================================================
+
   /// Calls a raw function pointer directly — no `dlopen`/`dlsym`, the address
   /// is already known. Typical source: a pointer *returned* by a previous
   /// call (C ABI functions returning function pointers exist — e.g. libc's
   /// `signal()` both takes and returns one), or read out of a dispatch table
   /// via `readMemory`.
-  ///
-  /// Works exactly like `call!`/`Library::call` — same generic return type
-  /// inferred via `Primitive`, same argument handling — just without a
-  /// `Library` to go through: a name is replaced by an address. `&self`
-  /// because the address is only meaningful within the clone this `Scope`
-  /// belongs to, same lifetime rule as `Value::Pointer` itself.
   pub fn callPointer<T: Primitive>(&self, pointer: impl Into<usize>, args: Vec<Value>) -> Result<T, FFIError>
   {
     let raw: Value = sendRawRequest(FFIRequest::CallPointer { pointer: pointer.into(), args, resultType: T::TypeTag })?;
@@ -159,6 +173,7 @@ impl<'g> Scope<'g>
   }
 
   /// Fire-and-forget variant of `callPointer` — mirrors `Library::callv`.
+  #[inline]
   pub fn callvPointer(&self, pointer: impl Into<usize>, args: Vec<Value>) -> Result<(), FFIError>
   {
     self.callPointer::<()>(pointer, args)
@@ -203,7 +218,7 @@ impl<'g> Drop for Scope<'g>
 
 /// Calls a raw function pointer through a `Scope`.
 #[macro_export]
-macro_rules! callPointer 
+macro_rules! callPointer
 {
   ($scope:expr, $pointer:expr $(, $args:expr)* $(,)?) => {
     $scope.callPointer($pointer, vec![$($args.into()),*])
@@ -212,7 +227,7 @@ macro_rules! callPointer
 
 /// Fire-and-forget variant of `callPointer!` — mirrors `callv!`.
 #[macro_export]
-macro_rules! callvPointer 
+macro_rules! callvPointer
 {
   ($scope:expr, $pointer:expr $(, $args:expr)* $(,)?) => {
     $scope.callvPointer($pointer, vec![$($args.into()),*])

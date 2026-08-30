@@ -19,10 +19,10 @@ struct CallbackWrapper
 {
   /// The decoded Rust closure to be invoked.
   closure: Box<dyn Callable<Vec<Value>, Value>>,
-  
+
   /// Expected FFI argument types for correct deserialization.
   argTypes: Vec<Type>,
-  
+
   /// Expected FFI return type.
   returnType: Box<Type>
 }
@@ -32,13 +32,13 @@ struct CallbackEntry
 {
   /// Never read directly — kept alive purely for its `Drop` impl. `Closure`
   /// owns the JIT-compiled trampoline memory that `codePointer` points into;
-  /// 
+  ///
   /// if this field were removed (or dropped early), `codePointer` would
   /// dangle the moment registration returns, and C would jump into freed
   /// memory on the very next call. This is intentional RAII, not dead code.
   #[allow(dead_code)]
   closure: Closure<'static>,
-  
+
   /// Raw C function pointer to the JIT-compiled trampoline.
   codePointer: *mut c_void
 }
@@ -54,10 +54,7 @@ thread_local!{
   /// Set by `trampoline` if the user's closure panics mid-call.
   ///
   /// Panics cannot propagate through C stack frames. `catch_unwind` traps it, 
-  /// and this flag becomes the only way to surface the error. 
-  ///
-  /// `executeCall` checks this after the C call returns, producing a clean 
-  /// `FFIError` instead of silently returning a default/zero value.
+  /// and this flag becomes the only way to surface the error.
   static CallbackPanicked: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
@@ -67,7 +64,7 @@ fn registry() -> &'static Mutex<FxHashMap<u64, CallbackEntry>> {
 }
 
 /// The universal C-callable trampoline. 
-/// 
+///
 /// Converts C arguments to Rust `Value`s, invokes the closure, and translates the result back.
 unsafe extern "C" fn trampoline(
   _cif: &libffi::low::ffi_cif,
@@ -102,9 +99,9 @@ unsafe extern "C" fn trampoline(
 
 /// Maps a Value variant to its corresponding libffi C ABI type(s).
 #[inline]
-fn toCifTypes(val: &Value) -> Result<Vec<libffi::middle::Type>, FFIError>
+fn toCifTypes(value: &Value) -> Result<Vec<libffi::middle::Type>, FFIError>
 {
-  match val
+  match value
   {
     Value::U8(_) => Ok(vec![libffi::middle::Type::u8()]),
     Value::U16(_) => Ok(vec![libffi::middle::Type::u16()]),
@@ -123,6 +120,15 @@ fn toCifTypes(val: &Value) -> Result<Vec<libffi::middle::Type>, FFIError>
     Value::RawString(_) | Value::CString(_) => Ok(vec![libffi::middle::Type::pointer()]),
     Value::String(_) => Ok(vec![libffi::middle::Type::pointer(), libffi::middle::Type::usize()]),
     Value::Function(_) => Ok(vec![libffi::middle::Type::pointer()]),
+    Value::Struct(_) =>
+      // todo:
+      //  Passing a struct BY VALUE as a call argument is a distinct feature from
+      //  readDynamicStruct/writeDynamicStruct (which work through a pointer) —
+      //  technically reachable via Arg::new(bytes)/Type::structure(...), just not
+      //  implemented yet. Write it into memory and pass Value::Pointer instead.
+      Err(FFIError::Other(
+        "Value::Struct by value as a call argument is not implemented — writeDynamicStruct + Pointer instead".to_string()
+      )),
     Value::None => Err(FFIError::BadArgument("Cannot pass Value::None as argument".to_string()))
   }
 }
@@ -151,6 +157,7 @@ impl From<&Type> for libffi::middle::Type
       Type::F64 => Self::f64(),
       Type::Bool => Self::u8(),
       Type::Pointer => Self::pointer(),
+      Type::Struct(fields) => Self::structure(fields.iter().map(Self::from).collect::<Vec<_>>())
     }
   }
 }
@@ -220,6 +227,9 @@ fn prepareFFIArgs<'a>(
         };
         storage.push(Box::new(codePointer));
       }
+      Value::Struct(_) => return Err(FFIError::Other(
+        "Value::Struct by value as a call argument is not implemented — writeDynamicStruct + Pointer instead".to_string()
+      )),
       Value::None => return Err(FFIError::BadArgument("Cannot pass Value::None".to_string()))
     }
   }
@@ -299,6 +309,12 @@ fn prepareFFIArgs<'a>(
         let ptr: &*mut c_void = downcastRef(&storage[i])?;
         argsFfi.push(Arg::new(ptr));
       }
+      Value::Struct(_) =>
+        // todo:
+        //  Unreachable in practice: the first pass above already returns Err
+        //  on Value::Struct before this loop is ever entered. Kept only for
+        //  match exhaustiveness now that Value::Struct exists.
+        unreachable!("Value::Struct rejected in prepareFFIArgs' first pass"),
       Value::None => return Err(FFIError::BadArgument("Cannot pass Value::None".to_string()))
     }
   }
@@ -309,9 +325,9 @@ fn prepareFFIArgs<'a>(
 /// Calls the C function by pointer
 /// and wraps the obtained raw result back into the Value enum.
 #[inline]
-fn invokeFFI(cif: &Cif, codePointer: CodePtr, argsFfi: &[Arg], ffiResultType: &Type) -> Value
+fn invokeFFI(cif: &Cif, codePointer: CodePtr, argsFfi: &[Arg], ffiResultType: &Type) -> Result<Value, FFIError>
 {
-  match ffiResultType
+  Ok(match ffiResultType
   {
     Type::None => {
       unsafe { cif.call::<()>(codePointer, argsFfi) };
@@ -374,7 +390,17 @@ fn invokeFFI(cif: &Cif, codePointer: CodePtr, argsFfi: &[Arg], ffiResultType: &T
       let ptr: *mut c_void = unsafe{ cif.call::<*mut c_void>(codePointer, argsFfi) };
       Value::Pointer(ptr as usize)
     }
-  }
+    Type::Struct(_) =>
+      // todo:
+      //  `cif.call::<T>()` needs T: Sized known at compile time — impossible for
+      //  a struct shaped by a runtime Vec<Type>. The real fix is `Ret::new` over
+      //  a `Vec<u8>` buffer via `cif.call_return_into` (libffi-rs's `Ret`/`Arg`
+      //  both accept `?Sized`, so this doesn't need the low-level `ffi_cif`
+      //  dance) — a distinct feature from readDynamicStruct, not implemented yet.
+      return Err(FFIError::Other(
+        "returning a struct by value is not implemented — call with an out-param pointer and readDynamicStruct instead".to_string()
+      ))
+  })
 }
 
 /// Safely downcasts a boxed storage entry to a concrete reference type.
@@ -399,9 +425,9 @@ fn buildCif(argTypes: &[Type], returnType: &Type) -> Result<libffi::middle::Cif,
 }
 
 /// Safely reads a raw C pointer and converts it into a Rust `Value` based on the specified `Type`.
-const fn readArg(ptr: *const std::ffi::c_void, t: &Type) -> Value
+fn readArg(ptr: *const std::ffi::c_void, t: &Type) -> Value
 {
-  match t 
+  match t
   {
     Type::None => Value::None,
     Type::U8 => Value::U8(unsafe { *(ptr as *const u8) }),
@@ -418,13 +444,118 @@ const fn readArg(ptr: *const std::ffi::c_void, t: &Type) -> Value
     Type::F64 => Value::F64(unsafe { *(ptr as *const f64) }),
     Type::Bool => Value::Bool(unsafe { *(ptr as *const u8) != 0 }),
     Type::Pointer => Value::Pointer(unsafe { *(ptr as *const usize) }),
+    Type::Struct(fields) =>
+      // todo fix desc:
+      //  Struct-typed callback arguments (e.g. a qsort-style comparator taking
+      //  a struct by value): `ptr` already points at the field's own bytes —
+      //  same shape `readStructAt` expects. No error channel exists at this
+      //  C-ABI boundary (same reasoning as `CallbackPanicked`), so a failure
+      //  here — a genuinely malformed field list — degrades to `Value::None`
+      //  rather than unwinding into C.
+      readStructAt(ptr as usize, fields).unwrap_or(Value::None)
   }
+}
+
+// =================================================================================================
+
+/// Builds the libffi structure type for `fields` and returns each field's
+/// byte offset plus the struct's total size — both computed by libffi's
+/// `ffi_get_struct_offsets` for the current platform ABI (padding,
+/// alignment, nested structs included), never assumed by hand here.
+fn structLayout(fields: &[Type]) -> Result<(Vec<usize>, usize), FFIError>
+{
+  let mut ffiType: libffi::middle::Type =
+    libffi::middle::Type::structure(fields.iter().map(libffi::middle::Type::from));
+
+  let offsets: Vec<usize> = ffiType
+    .struct_offsets(libffi::middle::ffi_abi_FFI_DEFAULT_ABI)
+    .map_err(|e| FFIError::Other(format!("struct_offsets failed: {:?}", e)))?;
+
+  // Only valid to read after struct_offsets() — it's what lays the type out.
+  let size: usize = unsafe { (*ffiType.as_raw_ptr()).size };
+  Ok((offsets, size))
+}
+
+/// Reads a dynamically-typed struct's fields directly out of this process's
+/// (the zygote clone's) own memory at `base`. `fields` is an ordinary
+/// runtime `Vec<Type>` — this is the whole point: no `T: bytemuck::Pod`,
+/// no `#[repr(C)]` Rust struct needs to exist for the shape being read.
+fn readStructAt(base: usize, fields: &[Type]) -> Result<Value, FFIError>
+{
+  let (offsets, _size): (Vec<usize>, usize) = structLayout(fields)?;
+
+  let mut values: Vec<Value> = Vec::with_capacity(fields.len());
+  for (field, offset) in fields.iter().zip(offsets)
+  {
+    values.push(match field
+    {
+      Type::Struct(nested) =>
+        // Recurse directly so a layout error in a nested struct field propagates 
+        // as Err, instead of readArg's Value::None fallback.
+        readStructAt(base + offset, nested)?,
+      _ => readArg((base + offset) as *const c_void, field),
+    });
+  }
+  Ok(Value::Struct(values))
+}
+
+/// Writes a single scalar `Value` into raw process memory at `ptr`,
+/// mirroring `readArg` in reverse. A type/value mismatch is a hard `Err`
+/// here — unlike `writeRet`'s silent no-op, a struct field write isn't a
+/// fire-and-forget callback return, a caller should learn about it.
+fn writeFieldAt(ptr: usize, value: &Value, t: &Type) -> Result<(), FFIError>
+{
+  match (t, value)
+  {
+    (Type::None, Value::None) => {},
+    (Type::U8, Value::U8(v)) => unsafe { *(ptr as *mut u8) = *v },
+    (Type::U16, Value::U16(v)) => unsafe { *(ptr as *mut u16) = *v },
+    (Type::U32, Value::U32(v)) => unsafe { *(ptr as *mut u32) = *v },
+    (Type::U64, Value::U64(v)) => unsafe { *(ptr as *mut u64) = *v },
+    (Type::Usize, Value::Usize(v)) => unsafe { *(ptr as *mut usize) = *v },
+    (Type::I8, Value::I8(v)) => unsafe { *(ptr as *mut i8) = *v },
+    (Type::I16, Value::I16(v)) => unsafe { *(ptr as *mut i16) = *v },
+    (Type::I32, Value::I32(v)) => unsafe { *(ptr as *mut i32) = *v },
+    (Type::I64, Value::I64(v)) => unsafe { *(ptr as *mut i64) = *v },
+    (Type::Isize, Value::Isize(v)) => unsafe { *(ptr as *mut isize) = *v },
+    (Type::F32, Value::F32(v)) => unsafe { *(ptr as *mut f32) = *v },
+    (Type::F64, Value::F64(v)) => unsafe { *(ptr as *mut f64) = *v },
+    (Type::Bool, Value::Bool(v)) => unsafe { *(ptr as *mut u8) = if *v { 1 } else { 0 } },
+    (Type::Pointer, Value::Pointer(v)) => unsafe { *(ptr as *mut usize) = *v },
+    _ => return Err(FFIError::Other(format!(
+      "writeDynamicStruct: field type {:?} does not match value {:?}", t, value
+    ))),
+  }
+  Ok(())
+}
+
+/// Writes `values` into a dynamically-typed struct's fields directly into
+/// this process's memory at `base` — write-side mirror of `readStructAt`.
+fn writeStructAt(base: usize, fields: &[Type], values: &[Value]) -> Result<(), FFIError>
+{
+  if fields.len() != values.len() {
+    return Err(FFIError::Other(format!(
+      "writeDynamicStruct: expected {} field values, got {}", fields.len(), values.len()
+    )));
+  }
+
+  let (offsets, _size): (Vec<usize>, usize) = structLayout(fields)?;
+  for ((field, value), offset) in fields.iter().zip(values).zip(offsets)
+  {
+    match (field, value)
+    {
+      (Type::Struct(nestedFields), Value::Struct(nestedValues)) =>
+        writeStructAt(base + offset, nestedFields, nestedValues)?,
+      _ => writeFieldAt(base + offset, value, field)?,
+    }
+  }
+  Ok(())
 }
 
 /// Writes a Rust `Value` back into the raw C return pointer based on the expected `Type`.
 fn writeRet(ret: &mut std::ffi::c_void, value: Value, t: &Type)
 {
-  match (t, value) 
+  match (t, value)
   {
     (Type::None, _) => {}
     (Type::U8,  Value::U8(v))  => unsafe { *(ret as *mut std::ffi::c_void as *mut u8)  = v },
@@ -488,6 +619,17 @@ pub(super) fn executeFFI(
       Ok(Value::None)
     }
 
+    FFIRequest::ReadDynamicStruct { pointer, fields } => {
+      if pointer == 0 { return Err(FFIError::BadArgument("null pointer".to_string())); }
+      readStructAt(pointer, &fields)
+    }
+
+    FFIRequest::WriteDynamicStruct { pointer, fields, values } => {
+      if pointer == 0 { return Err(FFIError::BadArgument("null pointer".to_string())); }
+      writeStructAt(pointer, &fields, &values)?;
+      Ok(Value::None)
+    }
+
     FFIRequest::RegisterCallback { id, bytes, argTypes, returnType } => {
       let wrapper: Box<dyn Callable<Vec<Value>, Value>> = callback::decode(&bytes)
         .map_err(|e| FFIError::Other(format!("call decode failed: {e}")))?;
@@ -507,9 +649,9 @@ pub(super) fn executeFFI(
 }
 
 /// Executes inside the forked zygote worker, not the Zygote itself;
-/// 
+///
 /// performs `dlopen` of a specific library and calls the function through libffi;
-/// 
+///
 /// is called once per request, after which the worker terminates.
 fn executeCall(
   libraryPath: String,
@@ -601,7 +743,7 @@ fn invokeAtPointer(
 
   // Function call
   let codePointer: CodePtr = CodePtr(pointer as *mut c_void);
-  let ffiResult: Value = invokeFFI(&cif, codePointer, &argsFfi, &ffiResultType);
+  let ffiResult: Value = invokeFFI(&cif, codePointer, &argsFfi, &ffiResultType)?;
 
   // A registered callback may have panicked mid-call (see `trampoline` +
   // `CallbackPanicked`) — the C function still "completed" and ffiResult is

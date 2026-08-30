@@ -66,7 +66,10 @@ pub enum Value
   ///
   /// The `u64` holds the unique ID used to locate the JIT-compiled trampoline 
   /// inside the clone's callback registry.
-  Function(u64)
+  Function(u64),
+
+  /// Упорядоченный список полей — не именованных
+  Struct(Vec<Value>)
 }
 
 // =================================================================================================
@@ -103,7 +106,10 @@ pub enum Type
   Bool,
   
   /// Raw pointer.
-  Pointer
+  Pointer,
+
+  /// Упорядоченный список полей — не именованных
+  Struct(Vec<Type>)
 }
 
 // =================================================================================================
