@@ -68,7 +68,7 @@ pub enum Value
   /// inside the clone's callback registry.
   Function(u64),
 
-  /// Упорядоченный список полей — не именованных
+  /// An ordered list of fields (not named).
   Struct(Vec<Value>)
 }
 
@@ -108,7 +108,7 @@ pub enum Type
   /// Raw pointer.
   Pointer,
 
-  /// Упорядоченный список полей — не именованных
+  /// An ordered list of fields (not named).
   Struct(Vec<Type>)
 }
 
@@ -118,18 +118,18 @@ pub enum Type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Pointer(pub usize);
 
-/// Bridges a concrete Rust primitive to its Value/Type tag.
+/// Bridges a concrete Rust primitive to its [`Value`]/[`Type`] tag.
 pub trait Primitive: Sized
 {
   const TypeTag: Type;
 
-  /// Converts a dynamic `Value` into a concrete primitive type.
+  /// Converts a dynamic [`Value`] into a concrete primitive type.
   fn fromValue(value: Value) -> Result<Self, FFIError>;
-  /// Converts this primitive into a dynamic `Value`.
+  /// Converts this primitive into a dynamic [`Value`].
   fn toValue(self) -> Value;
 }
 
-/// Declares a binding between a primitive and a `Value` type.
+/// Declares a binding between a primitive and a [`Value`] type.
 macro_rules! implFFIPrimitive
 {
   ($rustType:ty, $variant:ident) =>
@@ -138,7 +138,7 @@ macro_rules! implFFIPrimitive
     {
       const TypeTag: Type = Type::$variant;
 
-      /// Parses the specific `Value` variant into this primitive type.
+      /// Parses the specific [`Value`] variant into this primitive type.
       fn fromValue(value: Value) -> Result<Self, FFIError>
       {
         match value {
@@ -147,13 +147,13 @@ macro_rules! implFFIPrimitive
         }
       }
 
-      /// Wraps this primitive value into its corresponding `Value` enum variant.
+      /// Wraps this primitive value into its corresponding [`Value`] enum variant.
       fn toValue(self) -> Value { Value::$variant(self) }
     }
     
     impl From<$rustType> for Value
     {
-      /// Converts the raw primitive into a dynamic `Value`.
+      /// Converts the raw primitive into a dynamic [`Value`].
       fn from(v: $rustType) -> Self { Value::$variant(v) }
     }
   };
@@ -178,7 +178,7 @@ impl Primitive for Pointer
 {
   const TypeTag: Type = Type::Pointer;
 
-  /// Extracts the address from a `Value::Pointer`.
+  /// Extracts the address from a [`Value::Pointer`].
   fn fromValue(value: Value) -> Result<Self, FFIError>
   {
     match value 
@@ -188,7 +188,7 @@ impl Primitive for Pointer
     }
   }
 
-  /// Converts this `Pointer` wrapper into a `Value::Pointer`.
+  /// Converts this [`Pointer`] wrapper into a [`Value::Pointer`].
   fn toValue(self) -> Value { Value::Pointer(self.0) }
 }
 
@@ -196,7 +196,7 @@ impl Primitive for ()
 {
   const TypeTag: Type = Type::None;
 
-  /// Validates and converts a `Value::None` into a Rust unit type `()`.
+  /// Validates and converts a [`Value::None`] into a Rust unit type `()`.
   fn fromValue(value: Value) -> Result<Self, FFIError>
   {
     match value {
@@ -205,19 +205,19 @@ impl Primitive for ()
     }
   }
 
-  /// Converts a unit type `()` into a `Value::None`.
+  /// Converts a unit type `()` into a [`Value::None`].
   fn toValue(self) -> Value { Value::None }
 }
 
 impl From<Pointer> for usize
 {
-  /// Extracts the underlying `usize` memory address from a `Pointer`.
+  /// Extracts the underlying `usize` memory address from a [`Pointer`].
   fn from(p: Pointer) -> Self { p.0 }
 }
 
 impl From<Pointer> for Value
 {
-  /// Converts a `Pointer` directly into a `Value::Pointer` variant.
+  /// Converts a [`Pointer`] directly into a [`Value::Pointer`] variant.
   fn from(p: Pointer) -> Self { Self::Pointer(p.0) }
 }
 
@@ -232,7 +232,9 @@ mod tests
   use crate::ffi::value::{Pointer, Value};
   // ===============================================================================================
 
-  /// Checks all signed integer types (I8, I16, I32, I64, Isize).
+  /// Checks all signed integer types 
+  /// 
+  /// [`Value::I8`], [`Value::I16`], [`Value::I32`], [`Value::I64`], [`Value::Isize`]
   #[test]
   fn signedIntegers() -> ()
   {
@@ -258,7 +260,9 @@ mod tests
     }.expect("Signed integers test failed");
   }
 
-  /// Checks all unsigned integer types (U8, U16, U32, U64, Usize).
+  /// Checks all unsigned integer types
+  ///
+  /// [`Value::U8`], [`Value::U16`], [`Value::U32`], [`Value::U64`], [`Value::Usize`].
   #[test]
   fn unsignedIntegers() -> ()
   {
@@ -284,7 +288,9 @@ mod tests
     }.expect("Unsigned integers test failed");
   }
 
-  /// Checks passing floating point numbers (F32, F64).
+  /// Checks passing floating point numbers
+  ///
+  /// [`Value::F32`], [`Value::F64`].
   #[test]
   fn float() -> ()
   {
@@ -305,7 +311,7 @@ mod tests
 
   // ===============================================================================================
 
-  /// Checks passing Bool and Usize types.
+  /// Checks passing [`Value::Bool`].
   #[test]
   fn bool() -> ()
   {

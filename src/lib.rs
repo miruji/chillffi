@@ -136,13 +136,30 @@
 //! 4. In case of errors, the supervisor intercepts the worker crash and returns
 //!    the error to Rust, keeping your application stable.
 //!
-//! # Modules
+//! <div class="warning">
 //!
-//! - [`mod@ffi`] — public API: [`Library`](crate::ffi::library::Library),
-//!   [`Value`](crate::ffi::value::Value), [`Type`](crate::ffi::value::Type),
-//!   [`Scope`](crate::ffi::scope::Scope),
-//!   [`AllocatedMemory`](crate::ffi::allocatedMemory::AllocatedMemory),
-//!   and error types.
+//! This does not protect you from the FFI code running inside the isolated process.
+//!
+//! For example, if it does something with your OS or file system -
+//! it is already your responsibility to separately protect against this.
+//!
+//! For example: You can use a virtual space for the file system and so on.
+//!
+//! </div>
+//!
+//! <div class="warning">
+//!
+//! FFI blocks should be as small as possible in size. I.e., not 100 lines in 1 FFI space.
+//!
+//! An exception can be considered when you need a single address space for several operations.
+//!
+//! In other cases, you should separate FFI requests as much as possible.
+//!
+//! Because no one can guarantee that any FFI request will not break your code.
+//!
+//! Even if you are an experienced programmer, there are things that do not depend on your experience.
+//!
+//! </div>
 //!
 //! # License
 //!
@@ -191,7 +208,7 @@ fn zygoteEntrypoint() -> ()
 
 // =================================================================================================
 
-/// Internal items re-exported for the `ffi!` macro.  
+/// Internal items re-exported for the [`ffi!`] macro.  
 /// Not part of the public API; do not use directly.
 #[doc(hidden)]
 pub mod __ffiInternal {

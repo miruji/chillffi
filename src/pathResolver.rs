@@ -1,3 +1,6 @@
+//! A path resolver for searching for files. Contains a global instance, but
+//! a declaration inside `scope` can also be used for local lists.
+// =================================================================================================
 use parking_lot::RwLock;
 use std::path::PathBuf;
 use std::sync::OnceLock;

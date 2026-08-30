@@ -14,7 +14,7 @@ use crate::ffi::value::Value;
 use crate::zygote::FFIRequest;
 // =================================================================================================
 
-/// Heavy stack or arena for temporary allocations within an ffi!{} scope.
+/// Heavy stack or arena for temporary allocations within an [`ffi!`] scope.
 struct HeavyStack
 {
   /// Local path resolver for the current scope.
@@ -23,10 +23,10 @@ struct HeavyStack
 
 // =================================================================================================
 
-/// Owner of HeavyStack. Created by the ffi!{} macro once per block (only if
+/// Owner of HeavyStack. Created by the [`ffi!`] macro once per block (only if
 /// the user requested Scope), lives and dies strictly with this block.
 ///
-/// Is not published directly — access only through Scope<'g>.
+/// Is not published directly — access only through [`Scope<'g>.`].
 #[doc(hidden)]
 pub struct ScopeGuard
 {
@@ -51,7 +51,7 @@ thread_local!{
   static ScopeStack: RefCell<Vec<*const ScopeGuard>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Resolves library name using local PathResolver of the innermost active scope.
+/// Resolves library name using local [`PathResolver`] of the innermost active scope.
 pub(super) fn resolveViaScope(name: &str) -> Option<String>
 {
   ScopeStack.with(|s| {
@@ -131,7 +131,7 @@ impl<'g> Scope<'g>
     sendRawRequest(FFIRequest::ReadMemory { pointer: pointer.into(), length })
   }
 
-  /// Writes data from `Value` into the clone's memory at `pointer`.
+  /// Writes data from [`Value`] into the clone's memory at `pointer`.
   #[inline]
   pub fn writeMemory(pointer: impl Into<usize>, value: Value) -> Result<(), FFIError>
   {
@@ -181,7 +181,7 @@ impl<'g> Scope<'g>
 
   // ===============================================================================================
 
-  /// Registers a closure built with `callback!` as an FFI-callable function
+  /// Registers a closure built with [`callback!`] as an FFI-callable function
   /// (e.g. a `qsort` comparator). Capture is explicit at the macro call site,
   /// this method only ships the already-built closure to the clone:
   pub fn callback<T>(&self, argTypes: Vec<Type>, returnType: Type, f: Sendable<Vec<Value>, Value, T>) -> Value
@@ -213,10 +213,11 @@ impl<'g> Drop for Scope<'g>
 
 // =================================================================================================
 
-// todo В целом это не совсем верно, scope тут не используется. Но защита на то, что использование
-// только внутри scope - должна быть. Поэтому это следует исправить.
+// todo
+//  In general, this is not entirely correct, scope is not used here. But protection that it is
+//  used only inside a scope should be present. Therefore, this should be fixed.
 
-/// Calls a raw function pointer through a `Scope`.
+/// Calls a raw function pointer through a [`Scope`].
 #[macro_export]
 macro_rules! callPointer
 {
@@ -225,7 +226,7 @@ macro_rules! callPointer
   };
 }
 
-/// Fire-and-forget variant of `callPointer!` — mirrors `callv!`.
+/// Fire-and-forget variant of [`callPointer!`] — mirrors [`callv!`].
 #[macro_export]
 macro_rules! callvPointer
 {
@@ -247,7 +248,7 @@ mod tests
   use crate::ffi::value::{Pointer, Value};
   // ===============================================================================================
 
-  /// Checks explicit memory release via Scope::free.
+  /// Checks explicit memory release via [`Scope::free`].
   #[test]
   fn free() -> ()
   {
@@ -260,7 +261,7 @@ mod tests
     }.expect("Scope::free failed");
   }
 
-  /// Checks reading memory allocated by C via Scope::readMemory.
+  /// Checks reading memory allocated by C via [`Scope::readMemory`].
   #[test]
   fn readMemory() -> ()
   {
@@ -281,7 +282,7 @@ mod tests
     assert_eq!(bytes, vec![0xABu8; 8]);
   }
 
-  /// Checks writing memory via Scope::writeMemory and reading it back through C.
+  /// Checks writing memory via [`Scope::writeMemory`] and reading it back through C.
   #[test]
   fn writeMemory() -> ()
   {

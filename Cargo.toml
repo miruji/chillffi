@@ -1,6 +1,6 @@
 [package]
 name = "chillffi"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 
 #
@@ -11,6 +11,10 @@ readme = "README.md"
 
 # ======================================================================================================================
 
+# For publish test:
+# cargo publish --dry-run
+# cargo package --list
+
 repository = "https://github.com/rts-lang/chillffi"
 keywords = ["ffi", "zygote", "ipc", "sandbox", "fork"]
 categories = ["external-ffi-bindings", "os::unix-apis", "api-bindings"]
@@ -18,7 +22,6 @@ publish = true
 
 include = [
   "src/**/*",
-  "examples/**/*", # Examples remain for convenience
   "Cargo.toml",
   "README.md",
   "LICENSE.md",

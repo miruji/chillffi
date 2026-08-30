@@ -14,7 +14,7 @@ use crate::zygote::{FFIRequest};
 use crate::ffi::callback::Callable;
 // =================================================================================================
 
-/// Callback registry inside the clone (not parent)
+/// Callback registry inside the clone (not parent).
 struct CallbackWrapper
 {
   /// The decoded Rust closure to be invoked.
@@ -97,7 +97,7 @@ unsafe extern "C" fn trampoline(
 
 // =================================================================================================
 
-/// Maps a Value variant to its corresponding libffi C ABI type(s).
+/// Maps a Value variant to its corresponding `libffi` C ABI type(s).
 #[inline]
 fn toCifTypes(value: &Value) -> Result<Vec<libffi::middle::Type>, FFIError>
 {
@@ -135,8 +135,7 @@ fn toCifTypes(value: &Value) -> Result<Vec<libffi::middle::Type>, FFIError>
 
 impl From<&Type> for libffi::middle::Type
 {
-  /// Specifies the return value type so that libffi knows
-  /// how many bytes to read after the call.
+  /// Specifies how many bytes `libffi` should read for the value.
   #[inline]
   fn from(t: &Type) -> Self
   {
@@ -650,9 +649,7 @@ pub(super) fn executeFFI(
 
 /// Executes inside the forked zygote worker, not the Zygote itself;
 ///
-/// performs `dlopen` of a specific library and calls the function through libffi;
-///
-/// is called once per request, after which the worker terminates.
+/// performs `dlopen` of a specific library and calls the function through libffi.
 fn executeCall(
   libraryPath: String,
   functionName: String,

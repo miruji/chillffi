@@ -8,12 +8,12 @@ pub enum FFIError
 {
   /// The global zygote in ZygoteState was not initialized.
   ZygoteNotInitialized,
-  /// The call is executed outside the context of the ffi!{} macro.
+  /// The call is executed outside the context of the [`ffi!`] macro.
   NoActiveZygoteScope,
   /// IPC communication failure with the zygote process.
   ZygoteCommunicationFailed(String),
 
-  /// Failed to dynamically load the library (.so / .dll).
+  /// Failed to dynamically load the library.
   LibraryLoadFailed { libraryPath: String, message: String },
   /// The requested library was not found in the registry by its ID.
   LibraryNotFound { libraryPath: String },

@@ -52,13 +52,15 @@ fn unregisterLibrary(id: usize) -> ()
 /// Sends a raw FFI request to the active zygote clone in the current thread's stack.
 pub(super) fn sendRawRequest(request: FFIRequest) -> Result<Value, FFIError>
 {
-  // Check whether the global zygote in ZygoteState has been initialized
+  // Check whether the global zygote in ZygoteState has been initialized.
   if ZygoteState.get().is_none() {
     // todo For callById this will be a repeated check.
     //  But in callById it is better to check it immediately.
     return Err(FFIError::ZygoteNotInitialized);
   }
 
+  // Retrieve the most recently pushed active zygote 
+  // from the thread-local stack to execute the raw FFI request.
   ZygoteStack.with(|stack| {
     let mut mutStack: RefMut<Vec<ClonedZygote>> = stack.borrow_mut();
     let zygote: &mut ClonedZygote = mutStack.last_mut().ok_or(FFIError::NoActiveZygoteScope)?;
@@ -80,12 +82,12 @@ fn callById(
   resultType: Type
 ) -> Result<Value, FFIError> 
 {
-  // Check whether the global zygote in ZygoteState has been initialized
+  // Check whether the global zygote in ZygoteState has been initialized.
   if ZygoteState.get().is_none() {
     return Err(FFIError::ZygoteNotInitialized);
   }
 
-  // Retrieve the path to the `.so` from the registry and construct an FFIRequest
+  // Retrieve the path to the library from the registry and construct an FFIRequest.
   let registry: RwLockReadGuard<FxHashMap<usize, String>> = getRegistry().read();
   if !registry.contains_key(&libraryId) {
      return Err(FFIError::LibraryNotFound{ libraryPath: libraryPath.to_string() });
@@ -103,16 +105,16 @@ fn callById(
 #[doc(hidden)]
 pub struct __Library<const Allowed: bool = false>
 {
-  /// Library identifier
+  /// Library identifier.
   libraryId: usize,
-  /// Path to the loaded library
+  /// Path to the loaded library.
   libraryPath: String
 }
 
-// Methods that are always available
+// Methods that are always available.
 impl<const Allowed: bool> __Library<Allowed>
 {
-  /// Returns the library identifier
+  /// Returns the library identifier.
   #[inline(always)]
   pub const fn id(&self) -> usize
   {
@@ -122,13 +124,13 @@ impl<const Allowed: bool> __Library<Allowed>
 
 impl<const Allowed: bool> Drop for __Library<Allowed> 
 {
-  /// Manual or automatic deletion
+  /// Manual or automatic deletion.
   fn drop(&mut self) {
     unregisterLibrary(self.libraryId)
   }
 }
 
-// Methods available only inside ffi!{}
+// Methods available only inside ffi!
 impl __Library<true>
 {
   /// Executes a function call from the loaded library.
@@ -242,7 +244,7 @@ mod tests
   }
 
   /// Checks that library is removed from registry 
-  /// when unloaded via `unload()`.
+  /// when unloaded via [`unload()`].
   #[test]
   fn libraryUnload() -> ()
   {
@@ -284,7 +286,7 @@ mod tests
 
   // ===============================================================================================
 
-  /// Checks repeated calls inside a single ffi!{} - uses cached dlopen.
+  /// Checks repeated calls inside a single [`ffi!`] - uses cached dlopen.
   #[test]
   fn multipleCallsInSingleLibrary() -> ()
   {
@@ -314,7 +316,7 @@ mod tests
 
   // ===============================================================================================
 
-  /// Checks passing Value::None as an argument - should return an error.
+  /// Checks passing [`Value::None`] as an argument - should return an error.
   #[test]
   fn noneArgumentFails() -> ()
   {
