@@ -89,8 +89,6 @@ impl<'g> Drop for AllocatedMemory<'g>
 mod tests
 {
   use crate::ffi;
-  use crate::call;
-  use crate::callv;
   use crate::ffi::allocatedMemory::AllocatedMemory;
   use crate::ffi::errors::FFIError;
   use crate::ffi::value::Value;
@@ -105,7 +103,11 @@ mod tests
 
       let libc: Library = Library::load("libc.so.6")?;
       // void *memset(void *s, int c, size_t n) — fills 8 bytes with 0xAB
-      callv!(libc, "memset", mem.asPointer(), 0xAB as i32, 8 as usize)?;
+      libc.call("memset")
+        .arg(mem.asPointer())
+        .arg::<i32>(0xAB)
+        .arg::<usize>(8)
+        .void()?;
 
       let Value::RawString(bytes) = mem.read()? else { 
         return Err(FFIError::Other("expected bytes".into())) 
@@ -127,7 +129,7 @@ mod tests
       mem.write(Value::CString(b"hello".to_vec()))?;
 
       let libc: Library = Library::load("libc.so.6")?;
-      let result: usize = call!(libc, "strlen", mem.asPointer())?;
+      let result: usize = libc.call("strlen").arg(mem.asPointer()).result()?;
 
       Ok(result)
     }).expect("AllocatedMemory::write failed");

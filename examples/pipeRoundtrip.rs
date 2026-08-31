@@ -1,8 +1,6 @@
 use chillffi::ffi::value::Value;
 use chillffi::ffi::errors::FFIError;
 use chillffi::ffi::allocatedMemory::AllocatedMemory;
-use chillffi::callv;
-use chillffi::call;
 use chillffi::ffi;
 // =================================================================================================
 
@@ -16,7 +14,7 @@ fn main() -> ()
     let fdsMem: AllocatedMemory = scope.alloc(8)?; // int pipefd[2]
     
     // Call pipe() to obtain read and write file descriptors
-    let result: i32 = call!(libc, "pipe", fdsMem.asPointer())?;
+    let result: i32 = libc.call("pipe").arg(fdsMem.asPointer()).result()?;
     if result != 0 {
       return Err(FFIError::Other("pipe() failed".into()));
     }
@@ -31,13 +29,21 @@ fn main() -> ()
     let writeFd: i32 = i32::from_ne_bytes(fdsBytes[4..8].try_into().unwrap());
 
     // Write payload to write end of pipe
-    callv!(libc, "write", writeFd, Value::RawString(b"hi".to_vec()), 2 as usize)?;
+    libc.call("write")
+      .arg(writeFd)
+      .arg(Value::RawString(b"hi".to_vec()))
+      .arg::<usize>(2)
+      .void()?;
 
     // Allocate memory buffer for reading
     let bufMem: AllocatedMemory = scope.alloc(2)?;
     
     // Read payload from read end of pipe into buffer
-    callv!(libc, "read", readFd, bufMem.asPointer(), 2 as usize)?;
+    libc.call("read")
+      .arg(readFd)
+      .arg(bufMem.asPointer())
+      .arg::<usize>(2)
+      .void()?;
 
     // Read buffer contents from memory block
     let Value::RawString(readBytes) = bufMem.read()? else {
@@ -45,8 +51,8 @@ fn main() -> ()
     };
 
     // Close file descriptors
-    callv!(libc, "close", readFd)?;
-    callv!(libc, "close", writeFd)?;
+    libc.call("close").arg(readFd).void()?;
+    libc.call("close").arg(writeFd).void()?;
 
     Ok(readBytes)
   }).expect("pipe roundtrip failed");

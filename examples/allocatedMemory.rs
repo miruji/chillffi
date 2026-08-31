@@ -1,7 +1,6 @@
 use chillffi::ffi::value::Value;
 use chillffi::ffi::errors::FFIError;
 use chillffi::ffi::allocatedMemory::AllocatedMemory;
-use chillffi::call;
 use chillffi::ffi;
 // =================================================================================================
 
@@ -16,11 +15,11 @@ fn main() -> ()
     let statMem: AllocatedMemory = scope.alloc(144)?;
 
     // Call stat() with path and allocated buffer
-    let result: i32 = call!(
-      libc, "stat",
-      Value::CString(b"/etc/hostname".to_vec()),
-      statMem.asPointer()
-    )?;
+    let result: i32 = 
+      libc.call("stat")
+        .arg(Value::CString(b"/etc/hostname".to_vec()))
+        .arg(statMem.asPointer())
+        .result()?;
     if result != 0 {
       return Err(FFIError::Other("stat() returned non-zero".into()));
     }

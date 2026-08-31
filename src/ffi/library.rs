@@ -130,14 +130,76 @@ impl<const Allowed: bool> Drop for __Library<Allowed>
   }
 }
 
-// Methods available only inside ffi!
-impl __Library<true>
+/// Public type from the outside.
+pub type Library = __Library<false>;
+
+/// Hidden type for ffi!
+#[doc(hidden)]
+pub type __FFILibrary = __Library<true>;
+
+// =================================================================================================
+
+/// Builder for fluent FFI calls.
+#[doc(hidden)]
+pub struct CallBuilder<'a> {
+  lib: &'a __FFILibrary,
+  name: String,
+  args: Vec<Value>,
+}
+
+impl<'a> CallBuilder<'a> 
 {
+  #[inline]
+  pub fn new(lib: &'a __FFILibrary, name: &str) -> Self {
+    Self {
+      lib,
+      name: name.to_string(),
+      args: Vec::new(),
+    }
+  }
+
+  /// Append one argument. Chainable.
+  #[inline]
+  pub fn arg<T>(mut self, value: T) -> Self
+  where
+    T: Into<Value>,
+  {
+    self.args.push(value.into());
+    self
+  }
+
+  /// Finalize: execute and return a typed result.
+  #[inline]
+  pub fn result<T: Primitive>(self) -> Result<T, FFIError> 
+  {
+    self.lib.__call(&self.name, self.args)
+  }
+
+  /// Finalize: execute and discard the result (void / fire-and-forget).
+  #[inline]
+  pub fn void(self) -> Result<(), FFIError> 
+  {
+    self.lib.__call::<()>(&self.name, self.args).map(|_| ())
+  }
+}
+
+// =================================================================================================
+
+// Methods available only inside ffi!
+impl __Library<true> {
+  /// Starts a fluent call builder.
+  #[inline]
+  #[doc(hidden)]
+  pub fn call(&self, name: &str) -> CallBuilder<'_> {
+    CallBuilder::new(self, name)
+  }
+
   /// Executes a function call from the loaded library.
   ///
   /// todo It should be completely hidden and not work directly
+  #[inline]
   #[doc(hidden)]
-  pub fn call<T: Primitive>(&self, functionName: &str, args: Vec<Value>) -> Result<T, FFIError>
+  pub fn __call<T: Primitive>(&self, functionName: &str, args: Vec<Value>) -> Result<T, FFIError> 
   {
     let raw: Value = callById(self.libraryId, &self.libraryPath, functionName, args, T::TypeTag)?;
     T::fromValue(raw)
@@ -146,11 +208,15 @@ impl __Library<true>
   /// Fire-and-forget variant: a call without waiting for or typing the result.
   ///
   /// todo It should be completely hidden and not work directly
+  #[inline]
   #[doc(hidden)]
-  pub fn callv(&self, functionName: &str, args: Vec<Value>) -> Result<(), FFIError>
+  pub fn __callv(&self, functionName: &str, args: Vec<Value>) -> Result<(), FFIError> 
   {
-    self.call::<()>(functionName, args)
+    self.__call::<()>(functionName, args)
   }
+
+  // There is no variant with `let a = call(`. Because you either expect void, or specify the type.
+  // It would be rough to require a different type specification if you can do it directly in `let a:`.
 
   /// Loads the library and registers it for further calls.
   pub fn load(libraryPath: &str) -> Result<Self, FFIError>
@@ -163,7 +229,7 @@ impl __Library<true>
     registerLibrary(libraryId, &resolved);
     Ok(Self{ libraryId, libraryPath: resolved })
   }
-  
+
   /// Unloads the library and removes it from the registry;
   ///
   /// Here self instead of &self is used so that after removal it is not possible
@@ -176,34 +242,6 @@ impl __Library<true>
     Ok(())
   }
 }
-
-/// Public type from the outside.
-pub type Library = __Library<false>;
-
-/// Hidden type for ffi!
-#[doc(hidden)]
-pub type __FFILibrary = __Library<true>;
-
-// =================================================================================================
-
-/// Executes a function call from the loaded library and casts the result to the expected type.
-#[macro_export]
-macro_rules! call {
-  ($lib:expr, $name:expr $(, $args:expr)* $(,)?) => {
-    $lib.call($name, vec![$($args.into()),*])
-  };
-}
-
-/// Executes a function call from the loaded library without expecting or typing a return value.
-#[macro_export]
-macro_rules! callv {
-  ($lib:expr, $name:expr $(, $args:expr)* $(,)?) => {
-    $lib.callv($name, vec![$($args.into()),*])
-  };
-}
-
-// There is no variant with `let a = call!(`. Because you either expect void, or specify the type.
-// It would be rough to require a different type specification if you can do it directly in `let a:`.
 
 // =================================================================================================
 
@@ -266,7 +304,7 @@ mod tests
   {
     let result: f64 = ffi!{
       let libm: Library = Library::load("libm.so.6")?;
-      Ok(call!(libm, "sqrt", 4.0 as f64)?)
+      Ok( libm.call("sqrt").arg::<f64>(4.0).result()? )
     }.expect("FFI call failed");
     
     assert!((result - 2.0).abs() < f64::EPSILON);
@@ -278,7 +316,7 @@ mod tests
   {
     let result: i32 = ffi!{
       let libm: Library = Library::load("libm.so.6")?;
-      Ok(call!(libm, "abs", -5 as i32)?)
+      Ok( libm.call("abs").arg::<i32>(-5).result()? )
     }.expect("FFI call failed");
     
     assert_eq!(result, 5);
@@ -298,7 +336,7 @@ mod tests
       for i in 1..=10 
       {
         let input: f64 = (i * i) as f64;
-        let res: f64 = call!(libm, "sqrt", input)?;
+        let res: f64 = libm.call("sqrt").arg(input).result()?;
         outputs.push(res);
       }
   
@@ -322,7 +360,7 @@ mod tests
   {
     let result: Result<f64, _> = ffi!{
       let libm: Library = Library::load("libm.so.6")?;
-      let res: f64 = call!(libm, "sqrt", Value::None)?;
+      let res: f64 = libm.call("sqrt").arg(Value::None).result()?;
       Ok(res)
     };
 

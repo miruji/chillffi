@@ -2,7 +2,6 @@ use chillffi::ffi::allocatedMemory::AllocatedMemory;
 use chillffi::ffi::value::{Type, Value};
 use chillffi::ffi::errors::FFIError;
 use chillffi::ffi::scope::Scope;
-use chillffi::callv;
 use chillffi::ffi;
 // =================================================================================================
 
@@ -19,7 +18,10 @@ fn main() -> ()
     let mem: AllocatedMemory = scope.alloc(16)?;
 
     // Call clock_gettime(CLOCK_REALTIME, mem)
-    callv!(libc, "clock_gettime", 0 as i32, mem.asPointer())?;
+    libc.call("clock_gettime")
+      .arg::<i32>(0)
+      .arg(mem.asPointer())
+      .void()?;
 
     // Read dynamically shaped struct from memory using libffi ABI rules
     let fields: Vec<Value> = Scope::readDynamicStruct(mem.address(), &timespecShape)?;

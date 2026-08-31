@@ -1,5 +1,3 @@
-use chillffi::call;
-use chillffi::callv;
 use chillffi::callback;
 use chillffi::callvPointer;
 use chillffi::ffi::value::{Value, Type, Pointer};
@@ -24,11 +22,18 @@ fn main() -> ()
 
     // Install it. The signal is never raised — signal() only stores and
     // returns pointers, delivery is irrelevant here.
-    callv!(libc, "signal", 10 as i32 /* SIGUSR1 */, handler)?;
+    libc.call("signal")
+      .arg::<i32>(10 /* SIGUSR1 */)
+      .arg(handler)
+      .void()?;
 
     // Restore SIG_DFL and capture what signal() reports as "previous" —
     // that has to be the exact address we just installed above.
-    let old: Pointer = call!(libc, "signal", 10 as i32, Pointer(0))?;
+    let old: Pointer = 
+      libc.call("signal")
+      .arg::<i32>(10)
+      .arg(Pointer(0))
+      .result()?;
 
     // Call that address directly, bypassing signal() entirely.
     callvPointer!(scope, old, 10 as i32)?;

@@ -227,8 +227,6 @@ impl From<Pointer> for Value
 mod tests
 {
   use crate::ffi;
-  use crate::call;
-  use crate::callv;
   use crate::ffi::value::{Pointer, Value};
   // ===============================================================================================
 
@@ -241,19 +239,19 @@ mod tests
     ffi!{
       let libc: Library = Library::load("libc.so.6")?;
       
-      let resI8: i8 = call!(libc, "abs", -5 as i8)?;
+      let resI8: i8 = libc.call("abs").arg::<i8>(-5).result()?;
       assert!(matches!(resI8, 5));
       
-      let resI16: i16 = call!(libc, "abs", -15 as i16)?;
+      let resI16: i16 = libc.call("abs").arg::<i16>(-15).result()?;
       assert!(matches!(resI16, 15));
       
-      let resI32: i32 = call!(libc, "abs", -42 as i32)?;
+      let resI32: i32 = libc.call("abs").arg::<i32>(-42).result()?;
       assert!(matches!(resI32, 42));
       
-      let resI64: i64 = call!(libc, "labs", -100000 as i64)?;
+      let resI64: i64 = libc.call("labs").arg::<i64>(-100000).result()?;
       assert!(matches!(resI64, 100000));
       
-      let resIsize: isize = call!(libc, "labs", -500 as isize)?;
+      let resIsize: isize = libc.call("labs").arg::<isize>(-500).result()?;
       assert!(matches!(resIsize, 500));
 
       Ok(())
@@ -269,19 +267,39 @@ mod tests
     ffi!{
       let libc: Library = Library::load("libc.so.6")?;
       
-      let resU8: u8 = call!(libc, "strnlen", Value::CString(b"a".to_vec()), 10 as u8)?;
+      let resU8: u8 = 
+        libc.call("strnlen")
+          .arg(Value::CString(b"a".to_vec()))
+          .arg::<u8>(10)
+          .result()?;
       assert!(matches!(resU8, 1));
       
-      let resU16: u16 = call!(libc, "strnlen", Value::CString(b"ab".to_vec()), 10 as u16)?;
+      let resU16: u16 = 
+        libc.call("strnlen")
+        .arg(Value::CString(b"ab".to_vec()))
+        .arg::<u16>(10)
+        .result()?;
       assert!(matches!(resU16, 2));
       
-      let resU32: u32 = call!(libc, "strnlen", Value::CString(b"abc".to_vec()), 10 as u32)?;
+      let resU32: u32 = 
+        libc.call("strnlen")
+        .arg(Value::CString(b"abc".to_vec()))
+        .arg::<u32>(10)
+        .result()?;
       assert!(matches!(resU32, 3));
       
-      let resU64: u64 = call!(libc, "strnlen", Value::CString(b"abcd".to_vec()), 10 as u64)?;
+      let resU64: u64 = 
+        libc.call("strnlen")
+        .arg(Value::CString(b"abcd".to_vec()))
+        .arg::<u64>(10)
+        .result()?;
       assert!(matches!(resU64, 4));
       
-      let resUsize: usize = call!(libc, "strnlen", Value::CString(b"abcde".to_vec()), 10 as usize)?;
+      let resUsize: usize = 
+        libc.call("strnlen")
+        .arg(Value::CString(b"abcde".to_vec()))
+        .arg::<usize>(10)
+        .result()?;
       assert!(matches!(resUsize, 5));
 
       Ok(())
@@ -296,14 +314,19 @@ mod tests
   {
     let resultF32: f32 = ffi!{
       let libm: Library = Library::load("libm.so.6")?;
-      Ok(call!(libm, "sqrtf", 16.0 as f32)?)
+      Ok( libm.call("sqrtf").arg::<f32>(16.0).result()? )
     }.expect("FFI F32 call failed");
     
     assert!((resultF32 - 4.0).abs() < f32::EPSILON);
 
     let resultF64: f64 = ffi!{
       let libm: Library = Library::load("libm.so.6")?;
-      Ok(call!(libm, "pow", 2.0 as f64, 3.0 as f64)?)
+      Ok(
+        libm.call("pow")
+          .arg::<f64>(2.0)
+          .arg::<f64>(3.0)
+          .result()?
+      )
     }.expect("FFI F64 call failed");
     
     assert!((resultF64 - 8.0).abs() < f64::EPSILON);
@@ -317,7 +340,7 @@ mod tests
   {
     let result: bool = ffi!{
       let libc: Library = Library::load("libc.so.6")?;
-      Ok(call!(libc, "isalpha", true)?)
+      Ok( libc.call("isalpha").arg(true).result()? )
     }.expect("FFI Bool call failed");
 
     assert!(!result);
@@ -332,7 +355,11 @@ mod tests
   {
     let result: Pointer = ffi!{
       let libc: Library = Library::load("libc.so.6")?;
-      Ok(call!(libc, "getenv", Value::CString(b"noSuchVar".to_vec()))?)
+      Ok(
+        libc.call("getenv")
+          .arg(Value::CString(b"noSuchVar".to_vec()))
+          .result()?
+      )
     }.expect("FFI pointer call failed");
     
     assert_eq!(result, Pointer(0));
@@ -349,11 +376,14 @@ mod tests
   {
     let len: usize = ffi!{
       let libc: Library = Library::load("libc.so.6")?;
-      let ptr: Pointer = call!(libc, "strdup", Value::CString(b"hello".to_vec()))?;
+      let ptr: Pointer = 
+        libc.call("strdup")
+          .arg(Value::CString(b"hello".to_vec()))
+          .result()?;
       assert_ne!(ptr, Pointer(0));
   
-      let result: usize = call!(libc, "strlen", ptr)?;
-      callv!(libc, "free", ptr)?;
+      let result: usize = libc.call("strlen").arg(ptr).result()?;
+      libc.call("free").arg(ptr).void()?;
       Ok(result)
     }.expect("pointer roundtrip failed");
 
@@ -368,7 +398,11 @@ mod tests
   {
     let result: usize = ffi!{
       let libc: Library = Library::load("libc.so.6")?;
-      Ok(call!(libc, "strlen", Value::CString(b"hello".to_vec()))?)
+      Ok(
+        libc.call("strlen")
+          .arg(Value::CString(b"hello".to_vec()))
+          .result()?
+      )
     }.expect("FFI CString call failed");
     
     assert_eq!(result, 5);
@@ -381,7 +415,11 @@ mod tests
   {
     let result: usize = ffi!{
       let libc: Library = Library::load("libc.so.6")?;
-      Ok(call!(libc, "strnlen", Value::String(b"hello world".to_vec()))?)
+      Ok(
+        libc.call("strnlen")
+        .arg(Value::String(b"hello world".to_vec()))
+        .result()?
+      )
     }.expect("FFI String call failed");
     
     assert_eq!(result, 11);
@@ -393,7 +431,11 @@ mod tests
   {
     let result: i32 = ffi!{
       let libc: Library = Library::load("libc.so.6")?;
-      Ok(call!(libc, "atoi", Value::RawString(b"12345\0".to_vec()))?)
+      Ok(
+        libc.call("atoi")
+          .arg(Value::RawString(b"12345\0".to_vec()))
+          .result()?
+      )
     }.expect("FFI RawString call failed");
     
     assert_eq!(result, 12345);

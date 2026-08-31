@@ -268,7 +268,7 @@ macro_rules! callback
       let siteTag: u64 = $crate::ffi::callback::tagOf(
         ::std::concat!(::std::file!(), ":", ::std::line!(), ":", ::std::column!())
       );
-      let relativeOffset: usize = $crate::ffi::callback::relativeOffsetOf(__callDecode as usize);
+      let relativeOffset: usize = $crate::ffi::callback::relativeOffsetOf(__callDecode as *const () as usize);
 
       $crate::ffi::callback::Sendable::new(relativeOffset, siteTag, __CallImpl { $( $name, )* })
     }

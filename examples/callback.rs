@@ -1,6 +1,5 @@
 use std::cmp::Ordering;
 use chillffi::ffi::value::{Value, Type};
-use chillffi::callv;
 use chillffi::ffi;
 use chillffi::ffi::allocatedMemory::AllocatedMemory;
 use chillffi::callback;
@@ -78,12 +77,12 @@ fn main() -> ()
     
     // Execute the C function.
     println!("[ffi!] Calling qsort(mem, 5, 4, compar)...");
-    callv!(libc, "qsort",
-      mem.asPointer(),
-      5 as usize,
-      4 as usize,
-      compar
-    )?;
+    libc.call("qsort")
+      .arg(mem.asPointer())
+      .arg::<usize>(5)
+      .arg::<usize>(4)
+      .arg(compar)
+      .void()?;
     println!("[ffi!] qsort returned\n");
     
     // Read the sorted memory block back into the parent process.

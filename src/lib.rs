@@ -30,7 +30,6 @@
 //!
 //! ```no_run
 //! use chillffi::ffi::value::{Value};
-//! use chillffi::call;
 //! use chillffi::ffi;
 //! 
 //! fn main() -> ()
@@ -41,7 +40,7 @@
 //!     let libm: Library = Library::load("libm.so.6")?;
 //!   
 //!     // Call the "sqrt" function, specifying the expected return type
-//!     Ok(call!(libm, "sqrt", 4.0 as f64)?)
+//!     Ok( libm.call("sqrt").arg::<f64>(4.0).result()? )
 //!     
 //!     // Here libm will be automatically cleared due to drop() when exiting the closure.
 //!     // You can also do this manually via drop(libm) or libm.unload()?
@@ -61,7 +60,6 @@
 //! use chillffi::ffi::allocatedMemory::{AllocatedMemory};
 //! use chillffi::ffi::value::{Value};
 //! use chillffi::ffi::errors::FFIError;
-//! use chillffi::callv;
 //! use chillffi::ffi;
 //! 
 //! fn main() -> ()
@@ -74,7 +72,10 @@
 //!     // struct timespec { time_t tv_sec; long tv_nsec; } — 16 bytes on x86_64 Linux
 //!     let mem: AllocatedMemory = scope.alloc(16)?;
 //!
-//!     callv!(libc, "clock_gettime", 0 as i32 /* CLOCK_REALTIME */, mem.asPointer())?;
+//!     libc.call("clock_gettime")
+//!       .arg::<i32>(0 /* CLOCK_REALTIME */)
+//!       .arg(mem.asPointer())
+//!       .void()?;
 //!
 //!     let Value::RawString(bytes) = mem.read()? else { 
 //!       panic!("expected bytes")

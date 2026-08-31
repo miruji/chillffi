@@ -1,4 +1,3 @@
-use chillffi::callv;
 use chillffi::ffi::allocatedMemory::{AllocatedMemory};
 use chillffi::ffi::value::{Value};
 use chillffi::ffi::errors::FFIError;
@@ -18,7 +17,10 @@ fn main() -> ()
     let mem: AllocatedMemory = scope.alloc(16)?;
 
     // Invoke the C function with the allocated pointer.
-    callv!(libc, "clock_gettime", 0 as i32 /* CLOCK_REALTIME */, mem.asPointer())?;
+    libc.call("clock_gettime")
+      .arg::<i32>(0 /* CLOCK_REALTIME */)
+      .arg(mem.asPointer())
+      .void()?;
 
     // Read the populated memory block back to the parent.
     let Value::RawString(bytes) = mem.read()? else { 
