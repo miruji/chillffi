@@ -16,14 +16,14 @@ fn main() -> ()
 /// A path with '/' — PathResolver is not involved; it goes directly to dlopen.
 fn testRawPath() -> ()
 {
-  let result: Pointer = ffi!{
-    let libprint: Library = Library::load("./examples/paths/libprint.so")?;
+  let result: Pointer = ffi!(|scope| {
+    let libprint: Library = scope.load("./examples/paths/libprint.so")?;
     Ok(
       libprint.call("print")
         .arg(Value::String(b"raw path\n".to_vec()))
         .result()?
     )
-  }.expect("raw path failed");
+  }).expect("raw path failed");
 
   assert!(matches!(result, Pointer(0)));
   println!("ok: raw path");
@@ -34,7 +34,7 @@ fn testScopePath() -> ()
 {
   let result: Pointer = ffi!(|scope| {
     scope.addSearchPath("examples/paths");
-    let libprint: Library = Library::load("libprint.so")?;
+    let libprint: Library = scope.load("libprint.so")?;
     Ok(
       libprint.call("print")
         .arg(Value::String(b"scope path\n".to_vec()))
@@ -51,14 +51,14 @@ fn testGlobalPath() -> ()
 {
   addGlobalSearchPath("examples/paths");
 
-  let result: Pointer = ffi!{
-    let libprint: Library = Library::load("libprint.so")?;
+  let result: Pointer = ffi!(|scope| {
+    let libprint: Library = scope.load("libprint.so")?;
     Ok(
       libprint.call("print")
         .arg(Value::String(b"global path\n".to_vec()))
         .result()?
     )
-  }.expect("global path failed");
+  }).expect("global path failed");
 
   assert!(matches!(result, Pointer(0)));
   println!("ok: global path");

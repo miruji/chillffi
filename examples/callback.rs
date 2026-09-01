@@ -11,7 +11,7 @@ fn main() -> ()
   println!("=== Starting qsort via chillffi ===\n");
 
   let sorted: Vec<i32> = ffi!(|scope| {
-    let libc: Library = Library::load("libc.so.6")?;
+    let libc: Library = scope.load("libc.so.6")?;
     println!("[ffi!] Loaded libc.so.6");
     
     // Allocate memory inside the clone for the array.

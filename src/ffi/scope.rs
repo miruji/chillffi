@@ -5,13 +5,13 @@ use std::sync::atomic::Ordering;
 use std::sync::atomic::AtomicU64;
 use std::cell::RefCell;
 use std::path::PathBuf;
-use crate::pathResolver::PathResolver;
+use crate::pathResolver::{PathResolver, resolveGlobal};
 use std::cell::UnsafeCell;
 use crate::ffi::allocatedMemory::AllocatedMemory;
 use crate::ffi::errors::FFIError;
-use crate::ffi::library::sendRawRequest;
+use crate::ffi::library::{sendRawRequest, nextLibraryId, registerLibrary, Library};
 use crate::ffi::value::Value;
-use crate::zygote::FFIRequest;
+use crate::zygote::{ClonedZygote, FFIRequest, ZygoteGuard};
 // =================================================================================================
 
 /// Heavy stack or arena for temporary allocations within an [`ffi!`] scope.
@@ -51,22 +51,13 @@ thread_local!{
   static ScopeStack: RefCell<Vec<*const ScopeGuard>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Resolves library name using local [`PathResolver`] of the innermost active scope.
-pub(super) fn resolveViaScope(name: &str) -> Option<String>
-{
-  ScopeStack.with(|s| {
-    let ptr: *const ScopeGuard = *s.borrow().last()?;
-    let slot: &Option<HeavyStack> = unsafe{ &*(*ptr).inner.get() };
-    slot.as_ref()?.pathResolver.as_ref()?.resolve(name)
-  })
-}
-
 // =================================================================================================
 
 /// A handle to the ScopeGuard of the current [`ffi!`]-block — borrows it for 'g.
 ///
-/// That is precisely why [`AllocatedMemory<'g>`] cannot leave the block: the ScopeGuard,
-/// which it borrows, is dropped at the boundary of the block, and this is checked by the compiler.
+/// That is precisely why [`AllocatedMemory<'g>`] and [`Library<'g>`] cannot leave
+/// the block: the ScopeGuard, which they borrow, is dropped at the boundary of the
+/// block, and this is checked by the compiler.
 pub struct Scope<'g>
 {
   guard: &'g ScopeGuard,
@@ -93,6 +84,27 @@ impl<'g> Scope<'g>
     slot.get_or_insert_with(|| HeavyStack{ pathResolver: None })
       .pathResolver.get_or_insert_with(PathResolver::default)
       .addPath(path);
+  }
+
+  // ===============================================================================================
+
+  /// Loads a dynamic library and binds the handle to this scope — the same
+  /// model as [`Scope::alloc`] / [`AllocatedMemory<'g>`].
+  /// 
+  /// Resolution order: this scope's local search path, then the global search path, 
+  /// then the raw path as given.
+  pub fn load(&self, libraryPath: &str) -> Result<Library<'g>, FFIError>
+  {
+    let slot: &Option<HeavyStack> = unsafe{ &*self.guard.inner.get() };
+    let resolved: String = slot.as_ref()
+      .and_then(|s| s.pathResolver.as_ref())
+      .and_then(|r| r.resolve(libraryPath))
+      .or_else(|| resolveGlobal(libraryPath))
+      .unwrap_or_else(|| libraryPath.to_string());
+
+    let libraryId: usize = nextLibraryId();
+    registerLibrary(libraryId, &resolved);
+    Ok(Library::new(libraryId, resolved))
   }
 
   // ===============================================================================================
@@ -213,6 +225,63 @@ impl<'g> Drop for Scope<'g>
 
 // =================================================================================================
 
+/// RAII owner of an isolated FFI execution context.
+///
+/// Created by [`FFIScope::enter`]. Holds:
+/// - a cloned zygote process and its IPC socket — any FFI operation sent
+///   through this thread's stack lands in this clone,
+/// - a [`ScopeGuard`] that anchors the `'g` lifetime of [`Scope`],
+///   [`AllocatedMemory<'g>`] and [`Library<'g>`].
+///
+/// On drop: the zygote is killed, the guard is released, and any
+/// [`AllocatedMemory<'g>`] / [`Library<'g>`] still alive is *not* freed
+/// automatically (their own `Drop` runs only while `'g` is still valid — by
+/// construction it has been, because we are now at the end of the borrow).
+/// 
+/// todo Требует рассмотрения, такого по идее не должно быть возможно делать:
+///  If you need to keep an allocation past the scope, extract its raw address
+///  via [`AllocatedMemory::address`] before the scope ends.
+///
+/// This is the non-macro entry point. It exists for use cases where the
+/// boundaries of the FFI block are not known at compile time — a JIT, an
+/// interpreter, or code generated from another language.
+pub struct FFIScope
+{
+  /// RAII handle that keeps the cloned zygote on the thread-local stack
+  /// for as long as we are alive.
+  _zygote: ZygoteGuard,
+  /// Backing storage for the `'g` lifetime borrowed by [`Scope`],
+  /// [`AllocatedMemory<'g>`] and [`Library<'g>`].
+  guard: ScopeGuard,
+}
+
+impl FFIScope
+{
+  /// Enters a new isolated FFI context: forks a fresh zygote clone and
+  /// prepares a scope guard. Returns an error if the global zygote has
+  /// not been initialized or if the fork / IPC handshake fails.
+  pub fn enter() -> Result<Self, FFIError>
+  {
+    let zygote: ClonedZygote = ClonedZygote::getMeClone()
+      .map_err(|e| FFIError::Other(format!("failed to acquire zygote clone: {}", e)))?;
+    let _zygote: ZygoteGuard = ZygoteGuard::enter(zygote);
+    let guard: ScopeGuard = ScopeGuard::new();
+    Ok(Self { _zygote, guard })
+  }
+
+  /// Borrows a [`Scope`] handle tied to this `FFIScope`'s lifetime.
+  ///
+  /// All [`AllocatedMemory<'g>`] / [`Library<'g>`] values obtained through this
+  /// handle are freed (via their own `Drop`) no later than when this `FFIScope`
+  /// is dropped — the compiler enforces that statically through `'g`.
+  pub fn scope(&self) -> Scope<'_>
+  {
+    Scope::new(&self.guard)
+  }
+}
+
+// =================================================================================================
+
 // todo
 //  In general, this is not entirely correct, scope is not used here. But protection that it is
 //  used only inside a scope should be present. Therefore, this should be fixed.
@@ -242,29 +311,31 @@ mod tests
 {
   use crate::ffi;
   use crate::ffi::errors::FFIError;
+  use crate::ffi::library::Library;
   use crate::ffi::scope::Scope;
   use crate::ffi::value::{Pointer, Value};
+  use crate::ffi::scope::FFIScope;
   // ===============================================================================================
 
   /// Checks explicit memory release via [`Scope::free`].
   #[test]
   fn free() -> ()
   {
-    ffi!{
-      let libc: Library = Library::load("libc.so.6")?;
+    ffi!(|scope| {
+      let libc: Library = scope.load("libc.so.6")?;
       let ptr: Pointer = libc.call("malloc").arg::<usize>(16).result()?;
 
       Scope::free(ptr)?;
       Ok(())
-    }.expect("Scope::free failed");
+    }).expect("Scope::free failed");
   }
 
   /// Checks reading memory allocated by C via [`Scope::readMemory`].
   #[test]
   fn readMemory() -> ()
   {
-    let bytes: Vec<u8> = ffi!{
-      let libc: Library = Library::load("libc.so.6")?;
+    let bytes: Vec<u8> = ffi!(|scope| {
+      let libc: Library = scope.load("libc.so.6")?;
       let ptr: Pointer = libc.call("malloc").arg::<usize>(8).result()?;
 
       libc.call("memset")
@@ -279,7 +350,7 @@ mod tests
 
       Scope::free(ptr)?;
       Ok(readBytes)
-    }.expect("Scope::readMemory failed");
+    }).expect("Scope::readMemory failed");
 
     assert_eq!(bytes, vec![0xABu8; 8]);
   }
@@ -288,8 +359,8 @@ mod tests
   #[test]
   fn writeMemory() -> ()
   {
-    let len: usize = ffi!{
-      let libc: Library = Library::load("libc.so.6")?;
+    let len: usize = ffi!(|scope| {
+      let libc: Library = scope.load("libc.so.6")?;
       let ptr: Pointer = libc.call("malloc").arg::<usize>(32).result()?;
 
       Scope::writeMemory(ptr, Value::CString(b"hello".to_vec()))?;
@@ -298,9 +369,47 @@ mod tests
 
       Scope::free(ptr)?;
       Ok(result)
-    }.expect("Scope::writeMemory failed");
+    }).expect("Scope::writeMemory failed");
 
     assert!(matches!(len, 5));
+  }
+
+  // ===============================================================================================
+
+  /// Verify that a single [`FFIScope`] can be reused across multiple FFI operations.
+  ///
+  /// All operations use the same zygote and scope. The test also verifies that
+  /// [`AllocatedMemory`] and [`Library`] remains tied to the scope lifetime.
+  #[test]
+  fn with_scope_retention() -> ()
+  {
+    // Direct RAII form: hold the scope ourselves and run several ops through it.
+    let (r1, r2): (f64, i32) = (|| -> Result<_, FFIError>
+    {
+      let ffiScope: FFIScope = FFIScope::enter()?;
+      let scope: Scope<'_> = ffiScope.scope();
+
+      // 1. load libm, call sqrt(9.0) — shares the same zygote.
+      let libm: Library = scope.load("libm.so.6")?;
+      let r1: f64 = libm.call("sqrt").arg::<f64>(9.0).result()?;
+
+      // 2. load libc, call abs(-7) on the SAME zygote clone.
+      let libc: Library = scope.load("libc.so.6")?;
+      let _abs: i32 = libc.call("abs").arg::<i32>(-7).result()?;
+
+      // 3. scope.alloc + writeMemory + strlen — AllocatedMemory<'g> is
+      // bounded by `ffiScope` (via `scope`), proving the 'g lifetime is real.
+      let mem = scope.alloc(32)?;
+      Scope::writeMemory(mem.address(), Value::CString(b"retained".to_vec()))?;
+      let r2: usize = libc.call("strlen").arg(mem.address()).result()?;
+
+      // mem drops here, sends Free, fine.
+      Ok((r1, r2 as i32))
+    })().expect("FFIScope flow failed");
+
+    //
+    assert!((r1 - 3.0).abs() < f64::EPSILON, "sqrt(9) != 3, got {}", r1);
+    assert_eq!(r2, 8, "strlen(\"retained\") != 8, got {}", r2);
   }
 
   // ===============================================================================================

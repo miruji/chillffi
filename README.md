@@ -42,16 +42,16 @@ Example of a safe call to the `sqrt` function from the system library `libm.so.6
 fn main() -> ()
 {
   // Perform an FFI call inside an isolated context using a macro
-  let result: f64 = ffi!{
+  let result: f64 = ffi!(|scope| {
     // Dynamically load the system library
-    let libm: Library = Library::load("libm.so.6")?;
+    let libm: Library = scope.load("libm.so.6")?;
   
     // Call the "sqrt" function, specifying the expected return type
-    Ok(call!(libm, "sqrt", 4.0 as f64)?)
+    Ok( libm.call("sqrt").arg::<f64>(4.0).result()? )
     
     // Here libm will be automatically cleared due to drop() when exiting the closure.
     // You can also do this manually via drop(libm) or libm.unload()?
-  }.expect("FFI call failed");
+  }).expect("FFI call failed");
 
   // Process the typed result
   println!("sqrt(4.0) = {}", result);
@@ -67,12 +67,15 @@ fn main() -> ()
   // clock_gettime(CLOCK_REALTIME, &timespec) — struct out-param via Alloc/ReadMemory,
   // the case a plain Value::Pointer can't cover on its own.
   let (secs, nanos): (i64, i64) = ffi!(|scope| {
-    let libc: Library = Library::load("libc.so.6")?;
+    let libc: Library = scope.load("libc.so.6")?;
 
     // struct timespec { time_t tv_sec; long tv_nsec; } — 16 bytes on x86_64 Linux
     let mem: AllocatedMemory = scope.alloc(16)?;
 
-    callv!(libc, "clock_gettime", 0 as i32 /* CLOCK_REALTIME */, mem.asPointer())?;
+    libc.call("clock_gettime")
+      .arg::<i32>(0 /* CLOCK_REALTIME */)
+      .arg(mem.asPointer())
+      .void()?;
 
     let Value::RawString(bytes) = mem.read()? else { 
       panic!("expected bytes")

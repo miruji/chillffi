@@ -8,7 +8,7 @@ use chillffi::ffi;
 fn main() -> ()
 {
   let received: Vec<u8> = ffi!(|scope| {
-    let libc: Library = Library::load("libc.so.6")?;
+    let libc: Library = scope.load("libc.so.6")?;
 
     // Allocate memory for pipefd array (2 ints)
     let fdsMem: AllocatedMemory = scope.alloc(8)?; // int pipefd[2]

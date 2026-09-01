@@ -31,20 +31,20 @@
 //! ```no_run
 //! use chillffi::ffi::value::{Value};
 //! use chillffi::ffi;
-//! 
+//!
 //! fn main() -> ()
 //! {
 //!   // Perform an FFI call inside an isolated context using a macro
-//!   let result: f64 = ffi!{
-//!     // Dynamically load the system library
-//!     let libm: Library = Library::load("libm.so.6")?;
+//!   let result: f64 = ffi!(|scope| {
+//!     // Dynamically load the system library, bound to this scope
+//!     let libm: Library = scope.load("libm.so.6")?;
 //!   
 //!     // Call the "sqrt" function, specifying the expected return type
 //!     Ok( libm.call("sqrt").arg::<f64>(4.0).result()? )
 //!     
 //!     // Here libm will be automatically cleared due to drop() when exiting the closure.
 //!     // You can also do this manually via drop(libm) or libm.unload()?
-//!   }.expect("FFI call failed");
+//!   }).expect("FFI call failed");
 //!
 //!   // Process the typed result
 //!   println!("sqrt(4.0) = {}", result);
@@ -61,13 +61,13 @@
 //! use chillffi::ffi::value::{Value};
 //! use chillffi::ffi::errors::FFIError;
 //! use chillffi::ffi;
-//! 
+//!
 //! fn main() -> ()
 //! {
 //!   // clock_gettime(CLOCK_REALTIME, &timespec) — struct out-param via Alloc/ReadMemory,
 //!   // the case a plain Value::Pointer can't cover on its own.
 //!   let (secs, nanos): (i64, i64) = ffi!(|scope| {
-//!     let libc: Library = Library::load("libc.so.6")?;
+//!     let libc: Library = scope.load("libc.so.6")?;
 //!
 //!     // struct timespec { time_t tv_sec; long tv_nsec; } — 16 bytes on x86_64 Linux
 //!     let mem: AllocatedMemory = scope.alloc(16)?;
@@ -92,9 +92,9 @@
 //! ```
 //!
 //! For more detailed examples, see the `examples` folder.
-//! 
+//!
 //! You can also run them via `cargo run --example <name>`.
-//! 
+//!
 //! # Why is this convenient
 //!
 //! In general practice, we are used to doing it like in Python and other
@@ -195,9 +195,9 @@ fn zygoteEntrypoint() -> ()
 {
   let mut args = env::args_os();
   args.next();
-  if let Some(arg) = args.next() 
+  if let Some(arg) = args.next()
   {
-    if arg == ZygoteFlag 
+    if arg == ZygoteFlag
     {
       runAsZygote();
     }
@@ -218,34 +218,28 @@ pub mod __ffiInternal {
 
 /// Main macro for working with FFI.
 ///
-/// It creates a copy of the zygote from the main zygote.
+/// It creates a copy of the zygote from the main zygote and opens a [`Scope`](crate::ffi::scope::Scope)
+/// bound to it — `scope` is how you load libraries ([`Scope::load`](crate::ffi::scope::Scope::load))
+/// and allocate memory ([`Scope::alloc`](crate::ffi::scope::Scope::alloc)) for the duration of the block.
 ///
-/// After that, any FFI code can be executed inside it.
-///
-/// Library specifically blocks FFI calls outside this macro.
+/// `Library<'g>` can only be constructed via `scope.load(...)`, and only lives as long as the
+/// scope that produced it — the compiler enforces this, not us. There is no variant of this
+/// macro without a scope: an FFI block always needs one to load anything into.
 ///
 /// Isolation allows adding FFI insertions without breaking or corrupting the main runtime.
-///
-/// todo
-///  Important: It will take ownership of the Library type — therefore, the code inside
-///  will have to specify it differently when this data type matches. However, this will
-///  be quite rare, because FFI insertions should be rare and it is not guaranteed that
-///  exactly Library will end up there.
-///  The simplest solution would be for the user to rename the type — then they will not
-///  see errors for their Library type.
 #[macro_export]
-macro_rules! ffi 
+macro_rules! ffi
 {
-  // Variant with access to Scope. `ffi!(|scope| {})`. 
-  // The scope name can be any name — the important thing is that there are no repetitions inside {}.
-  // Scope<'g> borrows the ScopeGuard of this block, therefore AllocatedMemory<'g>
+  // `ffi!(|scope| { ... })`. The scope name can be any identifier — the important
+  // thing is that there are no repetitions inside {}. Scope<'g> borrows the
+  // ScopeGuard of this block, therefore AllocatedMemory<'g> and Library<'g>
   // cannot be returned outside — the compiler catches this, not us.
   (|$scopeName:ident| { $($body:tt)* }) => 
   {
     (|| -> Result<_, $crate::ffi::errors::FFIError> 
     {
       #[allow(unused_imports)]
-      use $crate::ffi::library::__FFILibrary as Library;
+      use $crate::ffi::library::Library;
  
       // Creating a clone-zygote from the main one
       let zygote = $crate::__ffiInternal::ClonedZygote::getMeClone()?;
@@ -261,26 +255,6 @@ macro_rules! ffi
       $($body)*
     })()
   };
- 
-  // Variant without Scope, ScopeGuard is not created at all.
-  ($($body:tt)*) =>
-  {
-    (|| -> Result<_, $crate::ffi::errors::FFIError> 
-    {
-      #[allow(unused_imports)]
-      use $crate::ffi::library::__FFILibrary as Library;
- 
-      // Creating a clone-zygote from the main one
-      let zygote = $crate::__ffiInternal::ClonedZygote::getMeClone()?;
- 
-      // Registering the clone-zygote in the current thread's ZygoteStack
-      let _guard = $crate::__ffiInternal::ZygoteGuard::enter(zygote);
- 
-      // Executing the body
-      $($body)*
-    })()
-  };
-
 }
 
 // =================================================================================================

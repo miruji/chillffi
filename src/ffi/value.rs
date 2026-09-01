@@ -8,25 +8,25 @@ pub enum Value
 {
   /// Just an empty value.
   None,
-  
+
   //
   U8(u8),
   U16(u16),
   U32(u32),
   U64(u64),
   Usize(usize),
-  
+
   //
   I8(i8),
   I16(i16),
   I32(i32),
   I64(i64),
   Isize(isize),
-  
+
   //
   F32(f32),
   F64(f64),
-  
+
   //
   Bool(bool),
 
@@ -83,28 +83,28 @@ pub enum Type
 {
   /// Just an empty value.
   None,
-  
+
   //
   U8,
   U16,
   U32,
   U64,
   Usize,
-  
+
   //
   I8,
   I16,
   I32,
   I64,
   Isize,
-  
+
   //
   F32,
   F64,
-  
+
   //
   Bool,
-  
+
   /// Raw pointer.
   Pointer,
 
@@ -181,7 +181,7 @@ impl Primitive for Pointer
   /// Extracts the address from a [`Value::Pointer`].
   fn fromValue(value: Value) -> Result<Self, FFIError>
   {
-    match value 
+    match value
     {
       Value::Pointer(addr) => Ok(Self(addr)),
       _ => Err(FFIError::Other(format!("expected Pointer, got {:?}", value))),
@@ -231,13 +231,13 @@ mod tests
   // ===============================================================================================
 
   /// Checks all signed integer types 
-  /// 
+  ///
   /// [`Value::I8`], [`Value::I16`], [`Value::I32`], [`Value::I64`], [`Value::Isize`]
   #[test]
   fn signedIntegers() -> ()
   {
-    ffi!{
-      let libc: Library = Library::load("libc.so.6")?;
+    ffi!(|scope| {
+      let libc: Library = scope.load("libc.so.6")?;
       
       let resI8: i8 = libc.call("abs").arg::<i8>(-5).result()?;
       assert!(matches!(resI8, 5));
@@ -255,7 +255,7 @@ mod tests
       assert!(matches!(resIsize, 500));
 
       Ok(())
-    }.expect("Signed integers test failed");
+    }).expect("Signed integers test failed");
   }
 
   /// Checks all unsigned integer types
@@ -264,8 +264,8 @@ mod tests
   #[test]
   fn unsignedIntegers() -> ()
   {
-    ffi!{
-      let libc: Library = Library::load("libc.so.6")?;
+    ffi!(|scope| {
+      let libc: Library = scope.load("libc.so.6")?;
       
       let resU8: u8 = 
         libc.call("strnlen")
@@ -303,7 +303,7 @@ mod tests
       assert!(matches!(resUsize, 5));
 
       Ok(())
-    }.expect("Unsigned integers test failed");
+    }).expect("Unsigned integers test failed");
   }
 
   /// Checks passing floating point numbers
@@ -312,23 +312,23 @@ mod tests
   #[test]
   fn float() -> ()
   {
-    let resultF32: f32 = ffi!{
-      let libm: Library = Library::load("libm.so.6")?;
+    let resultF32: f32 = ffi!(|scope| {
+      let libm: Library = scope.load("libm.so.6")?;
       Ok( libm.call("sqrtf").arg::<f32>(16.0).result()? )
-    }.expect("FFI F32 call failed");
-    
+    }).expect("FFI F32 call failed");
+
     assert!((resultF32 - 4.0).abs() < f32::EPSILON);
 
-    let resultF64: f64 = ffi!{
-      let libm: Library = Library::load("libm.so.6")?;
+    let resultF64: f64 = ffi!(|scope| {
+      let libm: Library = scope.load("libm.so.6")?;
       Ok(
         libm.call("pow")
           .arg::<f64>(2.0)
           .arg::<f64>(3.0)
           .result()?
       )
-    }.expect("FFI F64 call failed");
-    
+    }).expect("FFI F64 call failed");
+
     assert!((resultF64 - 8.0).abs() < f64::EPSILON);
   }
 
@@ -338,10 +338,10 @@ mod tests
   #[test]
   fn bool() -> ()
   {
-    let result: bool = ffi!{
-      let libc: Library = Library::load("libc.so.6")?;
+    let result: bool = ffi!(|scope| {
+      let libc: Library = scope.load("libc.so.6")?;
       Ok( libc.call("isalpha").arg(true).result()? )
-    }.expect("FFI Bool call failed");
+    }).expect("FFI Bool call failed");
 
     assert!(!result);
   }
@@ -353,15 +353,15 @@ mod tests
   #[test]
   fn pointer() -> ()
   {
-    let result: Pointer = ffi!{
-      let libc: Library = Library::load("libc.so.6")?;
+    let result: Pointer = ffi!(|scope| {
+      let libc: Library = scope.load("libc.so.6")?;
       Ok(
         libc.call("getenv")
           .arg(Value::CString(b"noSuchVar".to_vec()))
           .result()?
       )
-    }.expect("FFI pointer call failed");
-    
+    }).expect("FFI pointer call failed");
+
     assert_eq!(result, Pointer(0));
   }
 
@@ -374,8 +374,8 @@ mod tests
   #[test]
   fn pointerRoundtrip() -> ()
   {
-    let len: usize = ffi!{
-      let libc: Library = Library::load("libc.so.6")?;
+    let len: usize = ffi!(|scope| {
+      let libc: Library = scope.load("libc.so.6")?;
       let ptr: Pointer = 
         libc.call("strdup")
           .arg(Value::CString(b"hello".to_vec()))
@@ -385,7 +385,7 @@ mod tests
       let result: usize = libc.call("strlen").arg(ptr).result()?;
       libc.call("free").arg(ptr).void()?;
       Ok(result)
-    }.expect("pointer roundtrip failed");
+    }).expect("pointer roundtrip failed");
 
     assert!(matches!(len, 5));
   }
@@ -396,15 +396,15 @@ mod tests
   #[test]
   fn cString() -> ()
   {
-    let result: usize = ffi!{
-      let libc: Library = Library::load("libc.so.6")?;
+    let result: usize = ffi!(|scope| {
+      let libc: Library = scope.load("libc.so.6")?;
       Ok(
         libc.call("strlen")
           .arg(Value::CString(b"hello".to_vec()))
           .result()?
       )
-    }.expect("FFI CString call failed");
-    
+    }).expect("FFI CString call failed");
+
     assert_eq!(result, 5);
   }
 
@@ -413,15 +413,15 @@ mod tests
   #[test]
   fn string() -> ()
   {
-    let result: usize = ffi!{
-      let libc: Library = Library::load("libc.so.6")?;
+    let result: usize = ffi!(|scope| {
+      let libc: Library = scope.load("libc.so.6")?;
       Ok(
         libc.call("strnlen")
         .arg(Value::String(b"hello world".to_vec()))
         .result()?
       )
-    }.expect("FFI String call failed");
-    
+    }).expect("FFI String call failed");
+
     assert_eq!(result, 11);
   }
 
@@ -429,15 +429,15 @@ mod tests
   #[test]
   fn rawString() -> ()
   {
-    let result: i32 = ffi!{
-      let libc: Library = Library::load("libc.so.6")?;
+    let result: i32 = ffi!(|scope| {
+      let libc: Library = scope.load("libc.so.6")?;
       Ok(
         libc.call("atoi")
           .arg(Value::RawString(b"12345\0".to_vec()))
           .result()?
       )
-    }.expect("FFI RawString call failed");
-    
+    }).expect("FFI RawString call failed");
+
     assert_eq!(result, 12345);
   }
 

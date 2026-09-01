@@ -8,7 +8,7 @@ use chillffi::ffi;
 fn main() -> ()
 {
   let size: i64 = ffi!(|scope| {
-    let libc: Library = Library::load("libc.so.6")?;
+    let libc: Library = scope.load("libc.so.6")?;
 
     // struct stat — 144 bytes on x86_64 Linux (glibc)
     // Allocate memory for struct stat out-parameter

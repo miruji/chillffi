@@ -1,9 +1,8 @@
 use std::cell::RefMut;
+use std::marker::PhantomData;
 use crate::ffi::value::Primitive;
 use parking_lot::RwLockReadGuard;
 use parking_lot::RwLock;
-use crate::pathResolver::resolveGlobal;
-use crate::ffi::scope;
 use crate::ffi::errors::FFIError;
 use fxhash::FxHashMap;
 use crate::zygote::ZygoteState;
@@ -21,7 +20,7 @@ static RegisteredLibraries: OnceLock<RwLock<FxHashMap<usize, String>>> = OnceLoc
 
 /// Returns the next unique library identifier.
 #[inline(always)]
-fn nextLibraryId() -> usize
+pub(super) fn nextLibraryId() -> usize
 {
   NextLibraryID.fetch_add(1, Ordering::SeqCst)
 }
@@ -35,7 +34,7 @@ fn getRegistry() -> &'static RwLock<FxHashMap<usize, String>>
 
 /// Adds a library to the registry by its identifier.
 #[inline]
-fn registerLibrary(id: usize, path: &str) -> ()
+pub(super) fn registerLibrary(id: usize, path: &str) -> ()
 {
   getRegistry().write().insert(id, path.to_string());
 }
@@ -80,7 +79,7 @@ fn callById(
   functionName: &str,
   args: Vec<Value>,
   resultType: Type
-) -> Result<Value, FFIError> 
+) -> Result<Value, FFIError>
 {
   // Check whether the global zygote in ZygoteState has been initialized.
   if ZygoteState.get().is_none() {
@@ -90,10 +89,10 @@ fn callById(
   // Retrieve the path to the library from the registry and construct an FFIRequest.
   let registry: RwLockReadGuard<FxHashMap<usize, String>> = getRegistry().read();
   if !registry.contains_key(&libraryId) {
-     return Err(FFIError::LibraryNotFound{ libraryPath: libraryPath.to_string() });
+    return Err(FFIError::LibraryNotFound{ libraryPath: libraryPath.to_string() });
   }
   drop(registry);
-  
+
   sendRawRequest(FFIRequest::Call {
     libraryPath: libraryPath.to_string(), functionName: functionName.to_string(), args, resultType,
   })
@@ -101,28 +100,50 @@ fn callById(
 
 // =================================================================================================
 
-/// Handle of the loaded library with a restriction on available methods.
-#[doc(hidden)]
-pub struct __Library<const Allowed: bool = false>
+/// Handle of a loaded library, bound to the [`Scope<'g>`] it was loaded through —
+/// same model as [`AllocatedMemory<'g>`](crate::ffi::allocatedMemory::AllocatedMemory).
+///
+/// `Library<'g>` cannot outlive the scope that created it: there is no way to
+/// construct one except via [`Scope::load`](crate::ffi::scope::Scope::load),
+/// which requires a live `Scope<'g>` in the first place. This replaces the old
+/// `__Library<const Allowed: bool>` gate — the lifetime *is* the gate now.
+pub struct Library<'g>
 {
   /// Library identifier.
   libraryId: usize,
   /// Path to the loaded library.
-  libraryPath: String
+  libraryPath: String,
+  /// Phantom lifetime marker tying the handle to the scope it was loaded through.
+  _scope: PhantomData<&'g ()>
 }
 
-// Methods that are always available.
-impl<const Allowed: bool> __Library<Allowed>
+impl<'g> Library<'g>
 {
+  /// Creates a handle for an already-registered library. Only callable from
+  /// [`Scope::load`](crate::ffi::scope::Scope::load) — `libraryId` must come
+  /// from [`nextLibraryId`] and already be registered via [`registerLibrary`].
+  #[inline(always)]
+  pub(super) const fn new(libraryId: usize, libraryPath: String) -> Self
+  {
+    Self { libraryId, libraryPath, _scope: PhantomData }
+  }
+
   /// Returns the library identifier.
   #[inline(always)]
   pub const fn id(&self) -> usize
   {
     self.libraryId
   }
+
+  /// Returns the resolved path the library was loaded from.
+  #[inline(always)]
+  pub fn path(&self) -> &str
+  {
+    &self.libraryPath
+  }
 }
 
-impl<const Allowed: bool> Drop for __Library<Allowed> 
+impl<'g> Drop for Library<'g>
 {
   /// Manual or automatic deletion.
   fn drop(&mut self) {
@@ -130,27 +151,22 @@ impl<const Allowed: bool> Drop for __Library<Allowed>
   }
 }
 
-/// Public type from the outside.
-pub type Library = __Library<false>;
-
-/// Hidden type for ffi!
-#[doc(hidden)]
-pub type __FFILibrary = __Library<true>;
-
 // =================================================================================================
 
 /// Builder for fluent FFI calls.
 #[doc(hidden)]
-pub struct CallBuilder<'a> {
-  lib: &'a __FFILibrary,
+pub struct CallBuilder<'a, 'g> 
+{
+  lib: &'a Library<'g>,
   name: String,
   args: Vec<Value>,
 }
 
-impl<'a> CallBuilder<'a> 
+impl<'a, 'g> CallBuilder<'a, 'g>
 {
   #[inline]
-  pub fn new(lib: &'a __FFILibrary, name: &str) -> Self {
+  pub fn new(lib: &'a Library<'g>, name: &str) -> Self 
+  {
     Self {
       lib,
       name: name.to_string(),
@@ -170,14 +186,14 @@ impl<'a> CallBuilder<'a>
 
   /// Finalize: execute and return a typed result.
   #[inline]
-  pub fn result<T: Primitive>(self) -> Result<T, FFIError> 
+  pub fn result<T: Primitive>(self) -> Result<T, FFIError>
   {
     self.lib.__call(&self.name, self.args)
   }
 
   /// Finalize: execute and discard the result (void / fire-and-forget).
   #[inline]
-  pub fn void(self) -> Result<(), FFIError> 
+  pub fn void(self) -> Result<(), FFIError>
   {
     self.lib.__call::<()>(&self.name, self.args).map(|_| ())
   }
@@ -185,12 +201,12 @@ impl<'a> CallBuilder<'a>
 
 // =================================================================================================
 
-// Methods available only inside ffi!
-impl __Library<true> {
+impl<'g> Library<'g> 
+{
   /// Starts a fluent call builder.
   #[inline]
-  #[doc(hidden)]
-  pub fn call(&self, name: &str) -> CallBuilder<'_> {
+  pub fn call(&self, name: &str) -> CallBuilder<'_, 'g> 
+  {
     CallBuilder::new(self, name)
   }
 
@@ -199,7 +215,7 @@ impl __Library<true> {
   /// todo It should be completely hidden and not work directly
   #[inline]
   #[doc(hidden)]
-  pub fn __call<T: Primitive>(&self, functionName: &str, args: Vec<Value>) -> Result<T, FFIError> 
+  pub fn __call<T: Primitive>(&self, functionName: &str, args: Vec<Value>) -> Result<T, FFIError>
   {
     let raw: Value = callById(self.libraryId, &self.libraryPath, functionName, args, T::TypeTag)?;
     T::fromValue(raw)
@@ -210,25 +226,13 @@ impl __Library<true> {
   /// todo It should be completely hidden and not work directly
   #[inline]
   #[doc(hidden)]
-  pub fn __callv(&self, functionName: &str, args: Vec<Value>) -> Result<(), FFIError> 
+  pub fn __callv(&self, functionName: &str, args: Vec<Value>) -> Result<(), FFIError>
   {
     self.__call::<()>(functionName, args)
   }
 
   // There is no variant with `let a = call(`. Because you either expect void, or specify the type.
   // It would be rough to require a different type specification if you can do it directly in `let a:`.
-
-  /// Loads the library and registers it for further calls.
-  pub fn load(libraryPath: &str) -> Result<Self, FFIError>
-  {
-    let resolved: String = scope::resolveViaScope(libraryPath)
-      .or_else(|| resolveGlobal(libraryPath))
-      .unwrap_or_else(|| libraryPath.to_string());
-
-    let libraryId: usize = nextLibraryId();
-    registerLibrary(libraryId, &resolved);
-    Ok(Self{ libraryId, libraryPath: resolved })
-  }
 
   /// Unloads the library and removes it from the registry;
   ///
@@ -257,12 +261,12 @@ mod tests
   #[test]
   fn libraryDrop() -> ()
   {
-    let id: usize = ffi!{
-      let libm: Library = Library::load("libm.so.6")?;
+    let id: usize = ffi!(|scope| {
+      let libm: Library = scope.load("libm.so.6")?;
       let id: usize = libm.id();
       drop(libm);
       Ok(id)
-    }.expect("ffi block failed");
+    }).expect("ffi block failed");
 
     assert!(!getRegistry().read().contains_key(&id));
   }
@@ -272,11 +276,11 @@ mod tests
   #[test]
   fn libraryAutoDrop() -> ()
   {
-    let id: usize = ffi!{
-      let libm: Library = Library::load("libm.so.6")?;
+    let id: usize = ffi!(|scope| {
+      let libm: Library = scope.load("libm.so.6")?;
       let id: usize = libm.id();
       Ok(id)
-    }.expect("ffi block failed");
+    }).expect("ffi block failed");
 
     assert!(!getRegistry().read().contains_key(&id));
   }
@@ -286,12 +290,12 @@ mod tests
   #[test]
   fn libraryUnload() -> ()
   {
-    let id: usize = ffi!{
-      let libm: Library = Library::load("libm.so.6")?;
+    let id: usize = ffi!(|scope| {
+      let libm: Library = scope.load("libm.so.6")?;
       let id: usize = libm.id();
       libm.unload()?;
       Ok(id)
-    }.expect("ffi block failed");
+    }).expect("ffi block failed");
 
     assert!(!getRegistry().read().contains_key(&id));
   }
@@ -302,11 +306,11 @@ mod tests
   #[test]
   fn sqrt() -> ()
   {
-    let result: f64 = ffi!{
-      let libm: Library = Library::load("libm.so.6")?;
+    let result: f64 = ffi!(|scope| {
+      let libm: Library = scope.load("libm.so.6")?;
       Ok( libm.call("sqrt").arg::<f64>(4.0).result()? )
-    }.expect("FFI call failed");
-    
+    }).expect("FFI call failed");
+
     assert!((result - 2.0).abs() < f64::EPSILON);
   }
 
@@ -314,11 +318,11 @@ mod tests
   #[test]
   fn abs() -> ()
   {
-    let result: i32 = ffi!{
-      let libm: Library = Library::load("libm.so.6")?;
+    let result: i32 = ffi!(|scope| {
+      let libm: Library = scope.load("libm.so.6")?;
       Ok( libm.call("abs").arg::<i32>(-5).result()? )
-    }.expect("FFI call failed");
-    
+    }).expect("FFI call failed");
+
     assert_eq!(result, 5);
   }
 
@@ -328,9 +332,9 @@ mod tests
   #[test]
   fn multipleCallsInSingleLibrary() -> ()
   {
-    let results: Vec<f64> = ffi!{
+    let results: Vec<f64> = ffi!(|scope| {
       let mut outputs: Vec<f64> = Vec::with_capacity(10);
-      let libm: Library = Library::load("libm.so.6")?;
+      let libm: Library = scope.load("libm.so.6")?;
   
       // 10 consecutive calls with a single loaded library
       for i in 1..=10 
@@ -341,7 +345,7 @@ mod tests
       }
   
       Ok(outputs)
-    }.expect("Batch FFI call failed");
+    }).expect("Batch FFI call failed");
 
     assert_eq!(results.len(), 10);
 
@@ -358,11 +362,11 @@ mod tests
   #[test]
   fn noneArgumentFails() -> ()
   {
-    let result: Result<f64, _> = ffi!{
-      let libm: Library = Library::load("libm.so.6")?;
+    let result: Result<f64, _> = ffi!(|scope| {
+      let libm: Library = scope.load("libm.so.6")?;
       let res: f64 = libm.call("sqrt").arg(Value::None).result()?;
       Ok(res)
-    };
+    });
 
     assert!(result.is_err(), "FFI call with Value::None should fail");
   }

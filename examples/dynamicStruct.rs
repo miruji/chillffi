@@ -12,7 +12,7 @@ fn main() -> ()
   let timespecShape: Vec<Type> = vec![Type::I64, Type::I64];
 
   let (secs, nanos): (i64, i64) = ffi!(|scope| {
-    let libc: Library = Library::load("libc.so.6")?;
+    let libc: Library = scope.load("libc.so.6")?;
     
     // Allocate memory for timespec struct (16 bytes)
     let mem: AllocatedMemory = scope.alloc(16)?;

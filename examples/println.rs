@@ -8,7 +8,7 @@ use chillffi::ffi;
 fn println(text: &str) -> Result<(), FFIError>
 {
   ffi!(|scope| {
-    let libc: Library = Library::load("libc.so.6")?;
+    let libc: Library = scope.load("libc.so.6")?;
 
     // C-string null termination
     let mut bytes: Vec<u8> = text.as_bytes().to_vec();

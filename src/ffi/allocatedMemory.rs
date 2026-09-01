@@ -31,7 +31,7 @@ pub struct AllocatedMemory<'g>
 impl<'g> AllocatedMemory<'g>
 {
   /// Creates a new wrapper for a raw zygote allocation.
-  pub(super) const fn new(address: usize, length: usize) -> Self 
+  pub(super) const fn new(address: usize, length: usize) -> Self
   {
     Self {
       address,
@@ -41,30 +41,30 @@ impl<'g> AllocatedMemory<'g>
   }
 
   /// Returns the raw memory address of the allocation.
-  pub const fn address(&self) -> usize 
+  pub const fn address(&self) -> usize
   {
     self.address
   }
   /// Returns the size of the allocated memory block in bytes.
-  pub const fn length(&self) -> usize 
+  pub const fn length(&self) -> usize
   {
     self.length
   }
 
   /// Wraps the address into a [`Value::Pointer`] for FFI calls.
-  pub const fn asPointer(&self) -> Value 
+  pub const fn asPointer(&self) -> Value
   {
     Value::Pointer(self.address)
   }
 
   /// Reads the entire allocated memory block from the zygote.
-  pub fn read(&self) -> Result<Value, FFIError> 
+  pub fn read(&self) -> Result<Value, FFIError>
   {
     sendRawRequest(FFIRequest::ReadMemory { pointer: self.address, length: self.length })
   }
 
   /// Writes a value into the allocated memory block in the zygote.
-  pub fn write(&self, value: Value) -> Result<(), FFIError> 
+  pub fn write(&self, value: Value) -> Result<(), FFIError>
   {
     sendRawRequest(FFIRequest::WriteMemory { pointer: self.address, value })?;
     Ok(())
@@ -101,7 +101,7 @@ mod tests
     let bytes: Vec<u8> = ffi!(|scope| {
       let mem: AllocatedMemory = scope.alloc(8)?;
 
-      let libc: Library = Library::load("libc.so.6")?;
+      let libc: Library = scope.load("libc.so.6")?;
       // void *memset(void *s, int c, size_t n) — fills 8 bytes with 0xAB
       libc.call("memset")
         .arg(mem.asPointer())
@@ -118,7 +118,7 @@ mod tests
 
     assert_eq!(bytes, vec![0xABu8; 8]);
   }
-  
+
   /// Checks writing memory via [`AllocatedMemory::write`].
   #[test]
   fn write() -> ()
@@ -128,7 +128,7 @@ mod tests
 
       mem.write(Value::CString(b"hello".to_vec()))?;
 
-      let libc: Library = Library::load("libc.so.6")?;
+      let libc: Library = scope.load("libc.so.6")?;
       let result: usize = libc.call("strlen").arg(mem.asPointer()).result()?;
 
       Ok(result)

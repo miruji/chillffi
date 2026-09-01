@@ -10,7 +10,7 @@ fn main() -> ()
   // signal() both takes and returns a function pointer — the case
   // callPointer! exists for: calling an address we didn't get via dlsym.
   ffi!(|scope| {
-    let libc: Library = Library::load("libc.so.6")?;
+    let libc: Library = scope.load("libc.so.6")?;
 
     // Register a Rust closure as SIGUSR1's handler.
     let handler = callback!([] |args: Vec<Value>| -> Value {
