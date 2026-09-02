@@ -1,8 +1,8 @@
+use chillffi::ffi::types::Type;
 use chillffi::ffi::allocatedMemory::AllocatedMemory;
-use chillffi::ffi::value::{Type, Value};
-use chillffi::ffi::errors::FFIError;
 use chillffi::ffi::scope::Scope;
 use chillffi::ffi;
+use chillffi::ffi::types::primitive::DynamicList;
 // =================================================================================================
 
 /// Call clock_gettime and extract fields using dynamic struct layouts.
@@ -24,14 +24,10 @@ fn main() -> ()
       .void()?;
 
     // Read dynamically shaped struct from memory using libffi ABI rules
-    let fields: Vec<Value> = Scope::readDynamicStruct(mem.address(), &timespecShape)?;
+    let fields: DynamicList = Scope::readDynamicStruct(mem.address(), &timespecShape)?;
 
     // Parse extracted fields
-    let [Value::I64(secs), Value::I64(nanos)] = fields.as_slice() else {
-      return Err(FFIError::Other("expected two I64 fields".into()));
-    };
-
-    Ok((*secs, *nanos))
+    Ok((fields.get(0)?, fields.get(1)?))
   }).expect("readDynamicStruct failed");
 
   // Define a nested dynamic struct shape

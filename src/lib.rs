@@ -29,7 +29,6 @@
 //! # Quick start
 //!
 //! ```no_run
-//! use chillffi::ffi::value::{Value};
 //! use chillffi::ffi;
 //!
 //! fn main() -> ()
@@ -58,7 +57,6 @@
 //!
 //! ```no_run
 //! use chillffi::ffi::allocatedMemory::{AllocatedMemory};
-//! use chillffi::ffi::value::{Value};
 //! use chillffi::ffi::errors::FFIError;
 //! use chillffi::ffi;
 //!
@@ -77,9 +75,7 @@
 //!       .arg(mem.asPointer())
 //!       .void()?;
 //!
-//!     let Value::RawString(bytes) = mem.read()? else { 
-//!       panic!("expected bytes")
-//!     };
+//!     let bytes: Vec<u8> = mem.read()?;
 //!     drop(mem);
 //!
 //!     let secs: i64 = i64::from_ne_bytes(bytes[0..8].try_into().unwrap());

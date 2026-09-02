@@ -1,5 +1,4 @@
 use chillffi::ffi::allocatedMemory::AllocatedMemory;
-use chillffi::ffi::value::{Value};
 use chillffi::ffi::errors::FFIError;
 use chillffi::ffi;
 // =================================================================================================
@@ -16,7 +15,7 @@ fn println(text: &str) -> Result<(), FFIError>
 
     // Allocate memory and write null-terminated string bytes
     let mem: AllocatedMemory = scope.alloc(bytes.len())?;
-    mem.write(Value::RawString(bytes))?;
+    mem.write(bytes)?;
 
     // puts(const char *s) automatically appends a newline
     libc.call("puts")

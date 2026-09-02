@@ -1,6 +1,4 @@
 use chillffi::ffi::allocatedMemory::{AllocatedMemory};
-use chillffi::ffi::value::{Value};
-use chillffi::ffi::errors::FFIError;
 use chillffi::ffi;
 // =================================================================================================
 
@@ -23,9 +21,7 @@ fn main() -> ()
       .void()?;
 
     // Read the populated memory block back to the parent.
-    let Value::RawString(bytes) = mem.read()? else { 
-      return Err(FFIError::Other("expected bytes".into())) 
-    };
+    let bytes: Vec<u8> = mem.read()?;
     drop(mem);
 
     // Parse the raw bytes into strongly-typed Rust integers.

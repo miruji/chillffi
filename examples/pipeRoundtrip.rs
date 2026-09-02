@@ -1,6 +1,5 @@
-use chillffi::ffi::value::Value;
-use chillffi::ffi::errors::FFIError;
 use chillffi::ffi::allocatedMemory::AllocatedMemory;
+use chillffi::ffi::errors::FFIError;
 use chillffi::ffi;
 // =================================================================================================
 
@@ -20,9 +19,7 @@ fn main() -> ()
     }
 
     // Read file descriptors from memory block
-    let Value::RawString(fdsBytes) = fdsMem.read()? else {
-      return Err(FFIError::Other("expected bytes".into()))
-    };
+    let fdsBytes: Vec<u8> = fdsMem.read()?;
     
     // Parse read and write file descriptors
     let readFd: i32 = i32::from_ne_bytes(fdsBytes[0..4].try_into().unwrap());
@@ -31,7 +28,7 @@ fn main() -> ()
     // Write payload to write end of pipe
     libc.call("write")
       .arg(writeFd)
-      .arg(Value::RawString(b"hi".to_vec()))
+      .arg(b"hi".to_vec())
       .arg::<usize>(2)
       .void()?;
 
@@ -46,9 +43,7 @@ fn main() -> ()
       .void()?;
 
     // Read buffer contents from memory block
-    let Value::RawString(readBytes) = bufMem.read()? else {
-      return Err(FFIError::Other("expected bytes".into()))
-    };
+    let readBytes: Vec<u8> = bufMem.read()?;
 
     // Close file descriptors
     libc.call("close").arg(readFd).void()?;

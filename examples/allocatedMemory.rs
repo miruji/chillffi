@@ -1,6 +1,5 @@
-use chillffi::ffi::value::Value;
-use chillffi::ffi::errors::FFIError;
 use chillffi::ffi::allocatedMemory::AllocatedMemory;
+use chillffi::ffi::errors::FFIError;
 use chillffi::ffi;
 // =================================================================================================
 
@@ -17,7 +16,7 @@ fn main() -> ()
     // Call stat() with path and allocated buffer
     let result: i32 = 
       libc.call("stat")
-        .arg(Value::CString(b"/etc/hostname".to_vec()))
+        .arg(c"/etc/hostname")
         .arg(statMem.asPointer())
         .result()?;
     if result != 0 {
@@ -25,9 +24,7 @@ fn main() -> ()
     }
 
     // Read populated memory block back to parent process
-    let Value::RawString(bytes) = statMem.read()? else {
-      return Err(FFIError::Other("expected bytes".into()))
-    };
+    let bytes: Vec<u8> = statMem.read()?;
 
     // st_size — offset 48
     // Parse st_size from raw bytes

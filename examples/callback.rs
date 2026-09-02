@@ -1,8 +1,9 @@
-use std::cmp::Ordering;
-use chillffi::ffi::value::{Value, Type};
-use chillffi::ffi;
+use crate::ffi::types::primitive::Pointer;
 use chillffi::ffi::allocatedMemory::AllocatedMemory;
+use std::cmp::Ordering;
 use chillffi::callback;
+use chillffi::ffi;
+use chillffi::ffi::types::primitive::Callback;
 // =================================================================================================
 
 /// Demonstrates passing a Rust closure as a C function pointer to `qsort` via FFI.
@@ -16,11 +17,7 @@ fn main() -> ()
     
     // Allocate memory inside the clone for the array.
     let mem: AllocatedMemory = scope.alloc(5 * 4)?;
-    let ptrAddr: usize = match mem.asPointer() {
-      Value::Pointer(addr) => addr,
-      other => panic!("expected Pointer, got {:?}", other),
-    };
-    println!("[ffi!] Allocated 20 bytes at address: 0x{:X}", ptrAddr);
+    println!("[ffi!] Allocated 20 bytes at address: 0x{:X}", mem.asPointer());
     
     // Initialize the source data.
     let data: [i32; 5] = [3, 1, 4, 1, 5];
@@ -28,27 +25,16 @@ fn main() -> ()
     
     // Write the source data into the allocated clone memory.
     let raw: &[u8] = unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, 20) };
-    mem.write(Value::RawString(raw.to_vec()))?;
+    mem.write(raw)?;
     println!("[ffi!] Written raw bytes to clone memory\n");
-
-    // Empty capture list — the comparator takes nothing from the outer scope,
-    // only its `args` parameter. If a capture was needed (e.g.,
-    // `threshold`), the list would look like `callback!([threshold: i32] |args| ...)`.
-    let compar = callback!([] |args: Vec<Value>| -> Value 
+    
+    // Register the closure in the clone's callback registry.
+    let compar: Callback = callback!(scope, [] |a: Pointer, b: Pointer| -> i32 
     {
-      let a: usize = match args[0] {
-          Value::Pointer(a) => a,
-          _ => panic!("expected Pointer for arg 0"),
-      };
-      let b: usize = match args[1] {
-          Value::Pointer(b) => b,
-          _ => panic!("expected Pointer for arg 1"),
-      };
-      
       // Direct dereferencing is correct: the closure runs inside the clone
       // (where the data resides), not in the parent process.
-      let av: i32 = unsafe { *(a as *const i32) };
-      let bv: i32 = unsafe { *(b as *const i32) };
+      let av: i32 = unsafe { *(a.0 as *const i32) };
+      let bv: i32 = unsafe { *(b.0 as *const i32) };
 
       let cmp: Ordering = av.cmp(&bv);
       let result: i32 = cmp as i32;
@@ -64,15 +50,8 @@ fn main() -> ()
         }
       );
 
-      Value::I32(result)
+      result
     });
-    
-    // Register the closure in the clone's callback registry.
-    let compar: Value = scope.callback(
-      vec![Type::Pointer, Type::Pointer],
-      Type::I32,
-      compar,
-    );
     println!("[ffi!] Registered comparator callback\n");
     
     // Execute the C function.
@@ -86,8 +65,7 @@ fn main() -> ()
     println!("[ffi!] qsort returned\n");
     
     // Read the sorted memory block back into the parent process.
-    let Value::RawString(bytes) = mem.read()? else { panic!() };
-    println!("[ffi!] Read back raw bytes: {:?}\n", bytes);
+    let bytes: Vec<u8> = mem.read()?;
     
     // Reconstruct the Rust vector from the raw bytes.
     let vec: Vec<i32> = bytes.chunks_exact(4)
@@ -105,3 +83,5 @@ fn main() -> ()
   assert_eq!(sorted, vec![1, 1, 3, 4, 5]);
   println!("Assertion passed: [1, 1, 3, 4, 5] ✓");
 }
+
+// =================================================================================================

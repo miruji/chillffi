@@ -1,6 +1,5 @@
-use crate::ffi::value::Value;
-use crate::ffi::value::Pointer;
 use chillffi::pathResolver::addGlobalSearchPath;
+use crate::ffi::types::primitive::Pointer;
 use chillffi::ffi;
 // =================================================================================================
 
@@ -20,7 +19,7 @@ fn testRawPath() -> ()
     let libprint: Library = scope.load("./examples/paths/libprint.so")?;
     Ok(
       libprint.call("print")
-        .arg(Value::String(b"raw path\n".to_vec()))
+        .arg("raw path\n")
         .result()?
     )
   }).expect("raw path failed");
@@ -37,7 +36,7 @@ fn testScopePath() -> ()
     let libprint: Library = scope.load("libprint.so")?;
     Ok(
       libprint.call("print")
-        .arg(Value::String(b"scope path\n".to_vec()))
+        .arg("scope path\n")
         .result()?
     )
   }).expect("scope path failed");
@@ -55,7 +54,7 @@ fn testGlobalPath() -> ()
     let libprint: Library = scope.load("libprint.so")?;
     Ok(
       libprint.call("print")
-        .arg(Value::String(b"global path\n".to_vec()))
+        .arg("global path\n")
         .result()?
     )
   }).expect("global path failed");

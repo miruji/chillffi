@@ -1,7 +1,8 @@
+use crate::ffi::types::primitive::Pointer;
+use crate::ffi::types::Value;
 use std::marker::PhantomData;
 use crate::ffi::errors::FFIError;
 use crate::ffi::library::sendRawRequest;
-use crate::ffi::value::Value;
 use crate::zygote::FFIRequest;
 // =================================================================================================
 
@@ -51,22 +52,33 @@ impl<'g> AllocatedMemory<'g>
     self.length
   }
 
-  /// Wraps the address into a [`Value::Pointer`] for FFI calls.
-  pub const fn asPointer(&self) -> Value
+  /// Wraps the address into a [`Pointer`] for FFI calls.
+  pub const fn asPointer(&self) -> Pointer
   {
-    Value::Pointer(self.address)
+    Pointer(self.address)
   }
 
-  /// Reads the entire allocated memory block from the zygote.
-  pub fn read(&self) -> Result<Value, FFIError>
+  /// Reads the entire allocated memory block from the zygote as raw bytes.
+  pub fn read(&self) -> Result<Vec<u8>, FFIError>
   {
-    sendRawRequest(FFIRequest::ReadMemory { pointer: self.address, length: self.length })
+    let val: Value = sendRawRequest(
+      FFIRequest::ReadMemory { 
+        pointer: self.address, 
+        length: self.length 
+      }
+    )?;
+    val.try_into()
   }
 
   /// Writes a value into the allocated memory block in the zygote.
-  pub fn write(&self, value: Value) -> Result<(), FFIError>
+  pub fn write(&self, value: impl Into<Value>) -> Result<(), FFIError>
   {
-    sendRawRequest(FFIRequest::WriteMemory { pointer: self.address, value })?;
+    sendRawRequest(
+      FFIRequest::WriteMemory { 
+        pointer: self.address, 
+        value: value.into() 
+      }
+    )?;
     Ok(())
   }
 }
@@ -89,9 +101,8 @@ impl<'g> Drop for AllocatedMemory<'g>
 mod tests
 {
   use crate::ffi;
+  use crate::ffi::types::Value;
   use crate::ffi::allocatedMemory::AllocatedMemory;
-  use crate::ffi::errors::FFIError;
-  use crate::ffi::value::Value;
   // ===============================================================================================
 
   /// Checks reading memory via [`AllocatedMemory::read`].
@@ -108,12 +119,8 @@ mod tests
         .arg::<i32>(0xAB)
         .arg::<usize>(8)
         .void()?;
-
-      let Value::RawString(bytes) = mem.read()? else { 
-        return Err(FFIError::Other("expected bytes".into())) 
-      };
-
-      Ok(bytes)
+      
+      Ok(mem.read()?)
     }).expect("alloc/readMemory/free roundtrip failed");
 
     assert_eq!(bytes, vec![0xABu8; 8]);

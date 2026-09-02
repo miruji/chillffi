@@ -1,6 +1,5 @@
-use chillffi::ffi::library::Library;
 use chillffi::ffi::scope::{FFIScope, Scope};
-use chillffi::ffi::value::Value;
+use chillffi::ffi::library::Library;
 use chillffi::ffi::errors::FFIError;
 // =================================================================================================
 
@@ -24,7 +23,7 @@ fn main() -> ()
 
     // Invoke the C function with the allocated pointer.
     let result: i32 = libc.call("stat")
-      .arg(Value::CString(b"/etc/hostname".to_vec()))
+      .arg(c"/etc/hostname")
       .arg(statMem.asPointer())
       .result()?;
 
@@ -33,9 +32,7 @@ fn main() -> ()
     }
 
     // Read the populated memory block back to the parent.
-    let Value::RawString(bytes) = statMem.read()? else {
-      return Err(FFIError::Other("expected bytes".into()))
-    };
+    let bytes: Vec<u8> = statMem.read()?;
     drop(statMem);
 
     // Parse the raw bytes into a strongly-typed Rust integer (st_size — offset 48).

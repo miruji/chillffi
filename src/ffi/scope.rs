@@ -1,6 +1,10 @@
-use crate::ffi::callback::{Callable, Sendable};
+use crate::ffi::types::primitive::Arg;
+use crate::ffi::types::primitive::Callback;
+use crate::ffi::types::primitive::DynamicList;
+use crate::ffi::types::primitive::Primitive;
+use crate::ffi::types::{Type, Value};
+use crate::ffi::callback::sendable::Sendable;
 use serde::Serialize;
-use crate::ffi::value::{Type, Primitive};
 use std::sync::atomic::Ordering;
 use std::sync::atomic::AtomicU64;
 use std::cell::RefCell;
@@ -10,7 +14,6 @@ use std::cell::UnsafeCell;
 use crate::ffi::allocatedMemory::AllocatedMemory;
 use crate::ffi::errors::FFIError;
 use crate::ffi::library::{sendRawRequest, nextLibraryId, registerLibrary, Library};
-use crate::ffi::value::Value;
 use crate::zygote::{ClonedZygote, FFIRequest, ZygoteGuard};
 // =================================================================================================
 
@@ -132,33 +135,51 @@ impl<'g> Scope<'g>
   #[inline]
   pub fn free(pointer: impl Into<usize>) -> Result<(), FFIError>
   {
-    sendRawRequest(FFIRequest::Free { pointer: pointer.into() })?;
+    sendRawRequest(FFIRequest::Free { 
+      pointer: pointer.into() 
+    })?;
     Ok(())
   }
-
+  
   /// Reads `length` bytes at `pointer` from the clone's memory.
   #[inline]
-  pub fn readMemory(pointer: impl Into<usize>, length: usize) -> Result<Value, FFIError>
+  pub fn readMemory(pointer: impl Into<usize>, length: usize) -> Result<Vec<u8>, FFIError> 
   {
-    sendRawRequest(FFIRequest::ReadMemory { pointer: pointer.into(), length })
+    let value: Value = sendRawRequest(FFIRequest::ReadMemory {
+      pointer: pointer.into(),
+      length,
+    })?;
+    value.try_into()
   }
-
+  
   /// Writes data from [`Value`] into the clone's memory at `pointer`.
-  #[inline]
-  pub fn writeMemory(pointer: impl Into<usize>, value: Value) -> Result<(), FFIError>
+  pub fn writeMemory(pointer: impl Into<usize>, value: impl Into<Value>) -> Result<(), FFIError>
   {
-    sendRawRequest(FFIRequest::WriteMemory { pointer: pointer.into(), value })?;
+    sendRawRequest(FFIRequest::WriteMemory {
+      pointer: pointer.into(),
+      value: value.into(),
+    })?;
     Ok(())
   }
 
   // ===============================================================================================
 
-  /// Reads a dynamically-typed C struct at `pointer`, shaped by `fields`.
-  pub fn readDynamicStruct(pointer: impl Into<usize>, fields: &[Type]) -> Result<Vec<Value>, FFIError>
+  /// Reads a dynamically typed C structure from the pointer 
+  /// and returns it as a `DynamicStruct`.
+  pub fn readDynamicStruct(
+    pointer: impl Into<usize>,
+    fields: &[Type],
+  ) -> Result<DynamicList, FFIError> 
   {
-    match sendRawRequest(FFIRequest::ReadDynamicStruct { pointer: pointer.into(), fields: fields.to_vec() })? {
-      Value::Struct(values) => Ok(values),
-      other => Err(FFIError::Other(format!("ReadDynamicStruct: expected Value::Struct, got {:?}", other))),
+    match sendRawRequest(FFIRequest::ReadDynamicStruct {
+      pointer: pointer.into(),
+      fields: fields.to_vec(),
+    })? {
+      Value::Struct(values) => Ok(DynamicList::fromValues(values)),
+      other => Err(FFIError::Other(format!(
+        "ReadDynamicStruct: expected Value::Struct, got {:?}",
+        other
+      ))),
     }
   }
 
@@ -178,15 +199,20 @@ impl<'g> Scope<'g>
   /// call (C ABI functions returning function pointers exist — e.g. libc's
   /// `signal()` both takes and returns one), or read out of a dispatch table
   /// via `readMemory`.
-  pub fn callPointer<T: Primitive>(&self, pointer: impl Into<usize>, args: Vec<Value>) -> Result<T, FFIError>
+  pub fn callPointer<T: Primitive>(&self, pointer: impl Into<usize>, args: Vec<Arg>) -> Result<T, FFIError>
   {
-    let raw: Value = sendRawRequest(FFIRequest::CallPointer { pointer: pointer.into(), args, resultType: T::TypeTag })?;
+    let args: Vec<Value> = args.into_iter().map(|a: Arg| a.0).collect();
+    let raw: Value = sendRawRequest(FFIRequest::CallPointer { 
+      pointer: pointer.into(),
+      args, 
+      resultType: T::TypeTag 
+    })?;
     T::fromValue(raw)
   }
-
+  
   /// Fire-and-forget variant of `callPointer` — mirrors `Library::callv`.
   #[inline]
-  pub fn callvPointer(&self, pointer: impl Into<usize>, args: Vec<Value>) -> Result<(), FFIError>
+  pub fn callvPointer(&self, pointer: impl Into<usize>, args: Vec<Arg>) -> Result<(), FFIError>
   {
     self.callPointer::<()>(pointer, args)
   }
@@ -196,23 +222,22 @@ impl<'g> Scope<'g>
   /// Registers a closure built with [`callback!`] as an FFI-callable function
   /// (e.g. a `qsort` comparator). Capture is explicit at the macro call site,
   /// this method only ships the already-built closure to the clone:
-  pub fn callback<T>(&self, argTypes: Vec<Type>, returnType: Type, f: Sendable<Vec<Value>, Value, T>) -> Value
-  where
-    T: Callable<Vec<Value>, Value> + Serialize,
+  pub fn callback<State: Serialize + Send, Output: Primitive>(
+    &self,
+    f: Sendable<State, Output>
+  ) -> Callback
   {
     static nextID: AtomicU64 = AtomicU64::new(1);
     let id: u64 = nextID.fetch_add(1, Ordering::SeqCst);
 
-    let bytes: Vec<u8> = f.encode().expect("encode callback");
-
     sendRawRequest(FFIRequest::RegisterCallback {
-      id,
-      bytes,
-      argTypes,
-      returnType,
+      id, 
+      bytes: f.encode().expect("encode callback"),
+      argTypes: f.argTypes.clone(), 
+      returnType: f.returnType.clone(),
     }).expect("register callback failed");
 
-    Value::Function(id)
+    Callback(id)
   }
 
   // ===============================================================================================
@@ -237,8 +262,8 @@ impl<'g> Drop for Scope<'g>
 /// [`AllocatedMemory<'g>`] / [`Library<'g>`] still alive is *not* freed
 /// automatically (their own `Drop` runs only while `'g` is still valid — by
 /// construction it has been, because we are now at the end of the borrow).
-/// 
-/// todo Требует рассмотрения, такого по идее не должно быть возможно делать:
+///
+/// todo Requires consideration; this should theoretically not be possible:
 ///  If you need to keep an allocation past the scope, extract its raw address
 ///  via [`AllocatedMemory::address`] before the scope ends.
 ///
@@ -291,7 +316,7 @@ impl FFIScope
 macro_rules! callPointer
 {
   ($scope:expr, $pointer:expr $(, $args:expr)* $(,)?) => {
-    $scope.callPointer($pointer, vec![$($args.into()),*])
+    $scope.callPointer($pointer, vec![$($crate::ffi::types::primitive::Arg::from($args)),*])
   };
 }
 
@@ -300,7 +325,7 @@ macro_rules! callPointer
 macro_rules! callvPointer
 {
   ($scope:expr, $pointer:expr $(, $args:expr)* $(,)?) => {
-    $scope.callvPointer($pointer, vec![$($args.into()),*])
+    $scope.callvPointer($pointer, vec![$($crate::ffi::types::primitive::Arg::from($args)),*])
   };
 }
 
@@ -310,10 +335,11 @@ macro_rules! callvPointer
 mod tests
 {
   use crate::ffi;
+  use crate::ffi::allocatedMemory::AllocatedMemory;
+  use crate::ffi::types::primitive::Pointer;
   use crate::ffi::errors::FFIError;
   use crate::ffi::library::Library;
   use crate::ffi::scope::Scope;
-  use crate::ffi::value::{Pointer, Value};
   use crate::ffi::scope::FFIScope;
   // ===============================================================================================
 
@@ -344,9 +370,7 @@ mod tests
         .arg::<usize>(8)
         .void()?;
 
-      let Value::RawString(readBytes) = Scope::readMemory(ptr, 8)? else {
-        return Err(FFIError::Other("expected bytes".into()))
-      };
+      let readBytes: Vec<u8> = Scope::readMemory(ptr, 8)?;
 
       Scope::free(ptr)?;
       Ok(readBytes)
@@ -363,7 +387,7 @@ mod tests
       let libc: Library = scope.load("libc.so.6")?;
       let ptr: Pointer = libc.call("malloc").arg::<usize>(32).result()?;
 
-      Scope::writeMemory(ptr, Value::CString(b"hello".to_vec()))?;
+      Scope::writeMemory(ptr, c"hello")?;
 
       let result: usize = libc.call("strlen").arg(ptr).result()?;
 
@@ -399,8 +423,8 @@ mod tests
 
       // 3. scope.alloc + writeMemory + strlen — AllocatedMemory<'g> is
       // bounded by `ffiScope` (via `scope`), proving the 'g lifetime is real.
-      let mem = scope.alloc(32)?;
-      Scope::writeMemory(mem.address(), Value::CString(b"retained".to_vec()))?;
+      let mem: AllocatedMemory = scope.alloc(32)?;
+      Scope::writeMemory(mem.address(), c"retained")?;
       let r2: usize = libc.call("strlen").arg(mem.address()).result()?;
 
       // mem drops here, sends Free, fine.
