@@ -176,6 +176,8 @@ mod worker;
 mod zygote;
 pub mod ffi;
 pub mod pathResolver;
+pub mod errnoPolicy;
+
 // =================================================================================================
 
 use std::{env};

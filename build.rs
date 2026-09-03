@@ -9,7 +9,14 @@ fn main() -> ()
 {
   // Compiles C sources within the examples directory.
   let examplesDir: &Path = Path::new("examples");
-  if examplesDir.exists() { compileDir(examplesDir); }
+  if examplesDir.exists() 
+  { // Watching each individual .c file only protects files Cargo
+    // already knew about the last time this ran — a brand new .c file was
+    // never in that list, so it stayed invisible and never got compiled.
+    // Watching the directory itself covers additions too.
+    println!("cargo:rerun-if-changed=examples");
+    compileDir(examplesDir);
+  }
 }
 
 /// Recursively compiles C source files into shared libraries.

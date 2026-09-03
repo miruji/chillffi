@@ -1,3 +1,4 @@
+use crate::errnoPolicy::globalReadErrno;
 use crate::ffi::types::primitive::Arg;
 use crate::ffi::types::primitive::Callback;
 use crate::ffi::types::primitive::DynamicList;
@@ -21,7 +22,10 @@ use crate::zygote::{ClonedZygote, FFIRequest, ZygoteGuard};
 struct HeavyStack
 {
   /// Local path resolver for the current scope.
-  pathResolver: Option<PathResolver>
+  pathResolver: Option<PathResolver>,
+  /// Scope-level override for errno capture — see [`Scope::setReadErrno`].
+  /// `None` means "no scope override, fall through to the global default".
+  readErrno: Option<bool>
 }
 
 // =================================================================================================
@@ -54,6 +58,24 @@ thread_local!{
   static ScopeStack: RefCell<Vec<*const ScopeGuard>> = const { RefCell::new(Vec::new()) };
 }
 
+/// Reads the innermost active scope's errno-capture override, if any was set
+/// via [`Scope::setReadErrno`]. `None` if there's no active scope, or none
+/// was set — same "peek the thread-local stack" shape as `resolveGlobal`,
+/// just scoped instead of global, and without needing a live `Scope<'g>` handle
+/// (used by [`crate::ffi::library::resolveReadErrno`] from `CallBuilder`, which
+/// only has a `Library<'g>`, not the `Scope<'g>` that created it).
+pub(super) fn currentScopeReadErrno() -> Option<bool>
+{
+  ScopeStack.with(|stack| {
+    let guardPtr: *const ScopeGuard = *stack.borrow().last()?;
+    // Safety: a pointer is only ever on ScopeStack while its ScopeGuard is
+    // alive — pushed in Scope::new, popped in Scope::drop before the guard
+    // itself can go out of scope.
+    let slot: &Option<HeavyStack> = unsafe{ &*(*guardPtr).inner.get() };
+    slot.as_ref()?.readErrno
+  })
+}
+
 // =================================================================================================
 
 /// A handle to the ScopeGuard of the current [`ffi!`]-block — borrows it for 'g.
@@ -84,16 +106,30 @@ impl<'g> Scope<'g>
   pub fn addSearchPath(&self, path: impl Into<PathBuf>) -> ()
   {
     let slot: &mut Option<HeavyStack> = unsafe{ &mut *self.guard.inner.get() };
-    slot.get_or_insert_with(|| HeavyStack{ pathResolver: None })
+    slot.get_or_insert_with(|| HeavyStack{ pathResolver: None, readErrno: None })
       .pathResolver.get_or_insert_with(PathResolver::default)
       .addPath(path);
   }
 
   // ===============================================================================================
 
+  /// Overrides errno capture for every call made through this scope — see
+  /// [`FFIRequest::Call`]'s `readErrno` field for what capture actually means.
+  /// A per-call override (`.errno()`/`.noErrno()` on [`CallBuilder`](crate::ffi::library::CallBuilder))
+  /// still takes priority over this; this in turn takes priority over the
+  /// global default set via [`crate::errnoPolicy::setGlobalReadErrno`].
+  pub fn setReadErrno(&self, enabled: bool) -> ()
+  {
+    let slot: &mut Option<HeavyStack> = unsafe{ &mut *self.guard.inner.get() };
+    slot.get_or_insert_with(|| HeavyStack{ pathResolver: None, readErrno: None })
+      .readErrno = Some(enabled);
+  }
+
+  // ===============================================================================================
+
   /// Loads a dynamic library and binds the handle to this scope — the same
   /// model as [`Scope::alloc`] / [`AllocatedMemory<'g>`].
-  /// 
+  ///
   /// Resolution order: this scope's local search path, then the global search path, 
   /// then the raw path as given.
   pub fn load(&self, libraryPath: &str) -> Result<Library<'g>, FFIError>
@@ -120,7 +156,8 @@ impl<'g> Scope<'g>
     // Initialization of the heavy stack happens only on the first call to alloc()
     if stack.is_none() {
       *stack = Some(HeavyStack{
-        pathResolver: None
+        pathResolver: None,
+        readErrno: None
       });
     }
 
@@ -135,15 +172,15 @@ impl<'g> Scope<'g>
   #[inline]
   pub fn free(pointer: impl Into<usize>) -> Result<(), FFIError>
   {
-    sendRawRequest(FFIRequest::Free { 
-      pointer: pointer.into() 
+    sendRawRequest(FFIRequest::Free {
+      pointer: pointer.into()
     })?;
     Ok(())
   }
-  
+
   /// Reads `length` bytes at `pointer` from the clone's memory.
   #[inline]
-  pub fn readMemory(pointer: impl Into<usize>, length: usize) -> Result<Vec<u8>, FFIError> 
+  pub fn readMemory(pointer: impl Into<usize>, length: usize) -> Result<Vec<u8>, FFIError>
   {
     let value: Value = sendRawRequest(FFIRequest::ReadMemory {
       pointer: pointer.into(),
@@ -151,7 +188,7 @@ impl<'g> Scope<'g>
     })?;
     value.try_into()
   }
-  
+
   /// Writes data from [`Value`] into the clone's memory at `pointer`.
   pub fn writeMemory(pointer: impl Into<usize>, value: impl Into<Value>) -> Result<(), FFIError>
   {
@@ -169,7 +206,7 @@ impl<'g> Scope<'g>
   pub fn readDynamicStruct(
     pointer: impl Into<usize>,
     fields: &[Type],
-  ) -> Result<DynamicList, FFIError> 
+  ) -> Result<DynamicList, FFIError>
   {
     match sendRawRequest(FFIRequest::ReadDynamicStruct {
       pointer: pointer.into(),
@@ -184,7 +221,11 @@ impl<'g> Scope<'g>
   }
 
   /// Writes `values` into a dynamically-typed C struct at `pointer`.
-  pub fn writeDynamicStruct(pointer: impl Into<usize>, fields: &[Type], values: &[Value]) -> Result<(), FFIError>
+  pub fn writeDynamicStruct(
+    pointer: impl Into<usize>, 
+    fields: &[Type], 
+    values: &[Value]
+  ) -> Result<(), FFIError>
   {
     sendRawRequest(FFIRequest::WriteDynamicStruct {
       pointer: pointer.into(), fields: fields.to_vec(), values: values.to_vec()
@@ -199,22 +240,68 @@ impl<'g> Scope<'g>
   /// call (C ABI functions returning function pointers exist — e.g. libc's
   /// `signal()` both takes and returns one), or read out of a dispatch table
   /// via `readMemory`.
-  pub fn callPointer<T: Primitive>(&self, pointer: impl Into<usize>, args: Vec<Arg>) -> Result<T, FFIError>
+  pub fn callPointer<T: Primitive>(
+    &self, 
+    pointer: impl Into<usize>, 
+    args: Vec<Arg>
+  ) -> Result<T, FFIError>
   {
+    self.callPointerImpl(pointer, args, None)
+  }
+
+  /// Fire-and-forget variant of `callPointer` — mirrors `Library::callv`.
+  #[inline]
+  pub fn callvPointer(
+    &self, 
+    pointer: impl Into<usize>, 
+    args: Vec<Arg>
+  ) -> Result<(), FFIError>
+  {
+    self.callPointer::<()>(pointer, args)
+  }
+
+  /// Same as `callPointer`, but forces errno capture for this specific call —
+  /// no builder to chain `.errno()` onto, since `callPointer` skips `CallBuilder`
+  /// entirely. Read it back via [`Scope::lastErrno`].
+  #[inline]
+  pub fn callPointerErrno<T: Primitive>(
+    &self, 
+    pointer: impl Into<usize>, 
+    args: Vec<Arg>
+  ) -> Result<T, FFIError>
+  {
+    self.callPointerImpl(pointer, args, Some(true))
+  }
+
+  /// Shared implementation: resolves the effective `readErrno` flag (explicit
+  /// override, else scope, else global — same order as `CallBuilder::result`)
+  /// and sends the request.
+  fn callPointerImpl<T: Primitive>(
+    &self, 
+    pointer: impl Into<usize>, 
+    args: Vec<Arg>, 
+    readErrno: Option<bool>
+  ) -> Result<T, FFIError>
+  {
+    let readErrno: bool = readErrno.unwrap_or_else(|| currentScopeReadErrno().unwrap_or_else(globalReadErrno));
     let args: Vec<Value> = args.into_iter().map(|a: Arg| a.0).collect();
-    let raw: Value = sendRawRequest(FFIRequest::CallPointer { 
+    let raw: Value = sendRawRequest(FFIRequest::CallPointer {
       pointer: pointer.into(),
-      args, 
-      resultType: T::TypeTag 
+      args,
+      resultType: T::TypeTag,
+      readErrno
     })?;
     T::fromValue(raw)
   }
-  
-  /// Fire-and-forget variant of `callPointer` — mirrors `Library::callv`.
+
+  /// Returns the errno captured by the most recent call on this thread, if
+  /// that call's effective policy asked for it (see `setReadErrno`,
+  /// `CallBuilder::errno`, [`crate::errnoPolicy::setGlobalReadErrno`]) —
+  /// `None` otherwise, including right after any non-call operation.
   #[inline]
-  pub fn callvPointer(&self, pointer: impl Into<usize>, args: Vec<Arg>) -> Result<(), FFIError>
+  pub fn lastErrno() -> Option<i32>
   {
-    self.callPointer::<()>(pointer, args)
+    crate::ffi::library::lastErrno()
   }
 
   // ===============================================================================================
@@ -231,10 +318,10 @@ impl<'g> Scope<'g>
     let id: u64 = nextID.fetch_add(1, Ordering::SeqCst);
 
     sendRawRequest(FFIRequest::RegisterCallback {
-      id, 
+      id,
       bytes: f.encode().expect("encode callback"),
-      argTypes: f.argTypes.clone(), 
-      returnType: f.returnType.clone(),
+      argTypes: f.argTypes.clone(),
+      returnType: f.returnType.clone()
     }).expect("register callback failed");
 
     Callback(id)
@@ -396,6 +483,26 @@ mod tests
     }).expect("Scope::writeMemory failed");
 
     assert!(matches!(len, 5));
+  }
+
+  /// Checks that `Scope::setReadErrno(true)` makes a plain `.result()` call
+  /// (no `.errno()` on the call itself) surface errno via `Scope::lastErrno()`.
+  #[test]
+  fn scopeDefaultEnablesErrno() -> ()
+  {
+    let errno: Option<i32> = ffi!(|scope| {
+      scope.setReadErrno(true);
+      let libc: Library = scope.load("libc.so.6")?;
+      let fd: i32 =
+        libc.call("open")
+          .arg(c"/no/such/chillffi/scope/path")
+          .arg::<i32>(0 /* O_RDONLY */)
+          .result()?; // relies on the scope default, not .errno()
+      assert_eq!(fd, -1);
+      Ok(Scope::lastErrno())
+    }).expect("scope errno default test failed");
+
+    assert_eq!(errno, Some(libc::ENOENT));
   }
 
   // ===============================================================================================

@@ -1,3 +1,4 @@
+use crate::worker::takeLastErrno;
 use crate::ffi::types::{Type, Value};
 use parking_lot::MutexGuard;
 use parking_lot::Mutex;
@@ -48,7 +49,17 @@ pub(super) const ZygoteFlag: &str = "__zygote";
 pub(super) enum FFIRequest
 {
   /// Calls a function from a dynamic library with the given arguments and expected return type.
-  Call { libraryPath: String, functionName: String, args: Vec<Value>, resultType: Type },
+  ///
+  /// `readErrno`: when true, the clone reads `errno` immediately after the C call
+  /// returns and reports it back via [`FFIResponse::Ok`]'s second field. Costs one
+  /// extra read when set — calls that don't need it can leave it `false`.
+  Call { 
+    libraryPath: String, 
+    functionName: String, 
+    args: Vec<Value>, 
+    resultType: Type, 
+    readErrno: bool 
+  },
 
   /// Allocates a block of memory of the specified length in the zygote address space.
   Alloc { length: usize },
@@ -72,15 +83,20 @@ pub(super) enum FFIRequest
   RegisterCallback { id: u64, bytes: Vec<u8>, argTypes: Vec<Type>, returnType: Type },
   /// Calls a function directly by its raw memory pointer 
   /// with the provided arguments and expected return type.
-  CallPointer { pointer: usize, args: Vec<Value>, resultType: Type }
+  ///
+  /// `readErrno`: see [`FFIRequest::Call`].
+  CallPointer { pointer: usize, args: Vec<Value>, resultType: Type, readErrno: bool }
 }
 
 /// Response to the request with the execution result or error.
 #[derive(Serialize, Deserialize)]
 pub(super) enum FFIResponse
 {
-  /// Successful execution with the returned value.
-  Ok(Value),
+  /// Successful execution with the returned value, plus `errno` captured
+  /// immediately after the call — `Some` only if the request asked for it
+  /// via `readErrno`, `None` otherwise (including for non-Call requests).
+  Ok(Value, Option<i32>),
+  
   /// Execution failed with the corresponding error.
   Err(FFIError)
 }
@@ -351,7 +367,10 @@ fn handleRequest(requestBytes: &[u8], cache: &mut FxHashMap<String, Library>) ->
   {
     Ok(request) => match executeFFI(request, cache)
     {
-      Ok(v) => FFIResponse::Ok(v),
+      // `takeLastErrno` reads whatever `invokeFFI` stashed right after `cif.call()`
+      // (or `None`, for requests that never call — Alloc, Free, ReadMemory, ...
+      // and for calls that didn't ask for it) — and clears it for the next request.
+      Ok(v) => FFIResponse::Ok(v, takeLastErrno()),
       Err(e) => FFIResponse::Err(e),
     },
     Err(e) => FFIResponse::Err(e),

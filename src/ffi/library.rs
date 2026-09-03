@@ -1,7 +1,9 @@
+use crate::errnoPolicy::globalReadErrno;
 use crate::ffi::types::Type;
 use crate::ffi::types::primitive::Primitive;
 use crate::ffi::types::primitive::FfiArg;
 use crate::ffi::types::Value;
+use crate::ffi::scope::currentScopeReadErrno;
 use std::cell::RefMut;
 use std::marker::PhantomData;
 use parking_lot::RwLockReadGuard;
@@ -50,6 +52,40 @@ fn unregisterLibrary(id: usize) -> ()
 
 // =================================================================================================
 
+thread_local!{
+  /// errno captured by the most recently completed request, if the request
+  /// asked for it (see [`FFIRequest::Call`]/[`FFIRequest::CallPointer`]).
+  /// Overwritten by every `sendRawRequest` call, including non-Call ones —
+  /// so it always reflects "immediately after the last thing that ran",
+  /// which is what a caller checking it right after a suspicious result wants.
+  static LastErrno: std::cell::Cell<Option<i32>> = const {
+    std::cell::Cell::new(None) 
+  };
+}
+
+/// Reads the errno left behind by the most recent request on this thread.
+/// See [`crate::ffi::scope::Scope::lastErrno`] — the public entry point.
+pub(super) fn lastErrno() -> Option<i32>
+{
+  LastErrno.with(|e| e.get())
+}
+
+/// Resolves the effective errno-capture flag for a call: an explicit
+/// per-call override wins, then the enclosing scope's override (see
+/// [`Scope::setReadErrno`](crate::ffi::scope::Scope::setReadErrno)), then the
+/// global default (see [`crate::errnoPolicy::setGlobalReadErrno`]) — same
+/// most-specific-wins order as [`Scope::load`](crate::ffi::scope::Scope::load)'s
+/// path resolution.
+#[inline]
+pub(super) fn resolveReadErrno(perCall: Option<bool>) -> bool
+{
+  perCall
+    .unwrap_or_else(|| currentScopeReadErrno()
+    .unwrap_or_else(globalReadErrno))
+}
+
+// =================================================================================================
+
 /// Sends a raw FFI request to the active zygote clone in the current thread's stack.
 pub(super) fn sendRawRequest(request: FFIRequest) -> Result<Value, FFIError>
 {
@@ -67,7 +103,10 @@ pub(super) fn sendRawRequest(request: FFIRequest) -> Result<Value, FFIError>
     let zygote: &mut ClonedZygote = mutStack.last_mut().ok_or(FFIError::NoActiveZygoteScope)?;
 
     match zygote.call(request) {
-      Ok(FFIResponse::Ok(val)) => Ok(val),
+      Ok(FFIResponse::Ok(val, errno)) => {
+        LastErrno.with(|e| e.set(errno));
+        Ok(val)
+      }
       Ok(FFIResponse::Err(err)) => Err(err),
       Err(err) => Err(FFIError::ZygoteCommunicationFailed(err))
     }
@@ -80,7 +119,8 @@ fn callById(
   libraryPath: &str,
   functionName: &str,
   args: Vec<Value>,
-  resultType: Type
+  resultType: Type,
+  readErrno: bool
 ) -> Result<Value, FFIError>
 {
   // Check whether the global zygote in ZygoteState has been initialized.
@@ -96,7 +136,11 @@ fn callById(
   drop(registry);
 
   sendRawRequest(FFIRequest::Call {
-    libraryPath: libraryPath.to_string(), functionName: functionName.to_string(), args, resultType,
+    libraryPath: libraryPath.to_string(), 
+    functionName: functionName.to_string(), 
+    args, 
+    resultType, 
+    readErrno
   })
 }
 
@@ -157,22 +201,32 @@ impl<'g> Drop for Library<'g>
 
 /// Builder for fluent FFI calls.
 #[doc(hidden)]
-pub struct CallBuilder<'a, 'g> 
+pub struct CallBuilder<'a, 'g>
 {
+  /// todo desc
   lib: &'a Library<'g>,
+  
+  /// todo desc
   name: String,
+  
+  /// todo desc
   args: Vec<Value>,
+  
+  /// Per-call override of errno capture. `None` falls through to the
+  /// enclosing scope's setting, then the global default — see [`resolveReadErrno`].
+  readErrno: Option<bool>
 }
 
 impl<'a, 'g> CallBuilder<'a, 'g>
 {
   #[inline]
-  pub fn new(lib: &'a Library<'g>, name: &str) -> Self 
+  pub fn new(lib: &'a Library<'g>, name: &str) -> Self
   {
     Self {
       lib,
       name: name.to_string(),
       args: Vec::new(),
+      readErrno: None,
     }
   }
 
@@ -184,28 +238,49 @@ impl<'a, 'g> CallBuilder<'a, 'g>
     self
   }
 
+  /// Forces errno capture for this call specifically, regardless of the
+  /// scope's or global default. Read it back afterward via
+  /// [`Scope::lastErrno`](crate::ffi::scope::Scope::lastErrno).
+  #[inline]
+  pub const fn errno(mut self) -> Self
+  {
+    self.readErrno = Some(true);
+    self
+  }
+
+  /// Forces errno capture *off* for this call, overriding a scope/global
+  /// default that would otherwise have enabled it.
+  #[inline]
+  pub const fn noErrno(mut self) -> Self
+  {
+    self.readErrno = Some(false);
+    self
+  }
+
   /// Finalize: execute and return a typed result.
   #[inline]
   pub fn result<T: Primitive>(self) -> Result<T, FFIError>
   {
-    self.lib.__call(&self.name, self.args)
+    let readErrno: bool = resolveReadErrno(self.readErrno);
+    self.lib.__call(&self.name, self.args, readErrno)
   }
 
   /// Finalize: execute and discard the result (void / fire-and-forget).
   #[inline]
   pub fn void(self) -> Result<(), FFIError>
   {
-    self.lib.__call::<()>(&self.name, self.args).map(|_| ())
+    let readErrno: bool = resolveReadErrno(self.readErrno);
+    self.lib.__call::<()>(&self.name, self.args, readErrno).map(|_| ())
   }
 }
 
 // =================================================================================================
 
-impl<'g> Library<'g> 
+impl<'g> Library<'g>
 {
   /// Starts a fluent call builder.
   #[inline]
-  pub fn call(&self, name: &str) -> CallBuilder<'_, 'g> 
+  pub fn call(&self, name: &str) -> CallBuilder<'_, 'g>
   {
     CallBuilder::new(self, name)
   }
@@ -215,9 +290,14 @@ impl<'g> Library<'g>
   /// todo It should be completely hidden and not work directly
   #[inline]
   #[doc(hidden)]
-  pub fn __call<T: Primitive>(&self, functionName: &str, args: Vec<Value>) -> Result<T, FFIError>
+  pub fn __call<T: Primitive>(
+    &self, 
+    functionName: &str, 
+    args: Vec<Value>, 
+    readErrno: bool
+  ) -> Result<T, FFIError>
   {
-    let raw: Value = callById(self.libraryId, &self.libraryPath, functionName, args, T::TypeTag)?;
+    let raw: Value = callById(self.libraryId, &self.libraryPath, functionName, args, T::TypeTag, readErrno)?;
     T::fromValue(raw)
   }
 
@@ -226,9 +306,13 @@ impl<'g> Library<'g>
   /// todo It should be completely hidden and not work directly
   #[inline]
   #[doc(hidden)]
-  pub fn __callv(&self, functionName: &str, args: Vec<Value>) -> Result<(), FFIError>
+  pub fn __callv(
+    &self, 
+    functionName: &str, 
+    args: Vec<Value>
+  ) -> Result<(), FFIError>
   {
-    self.__call::<()>(functionName, args)
+    self.__call::<()>(functionName, args, resolveReadErrno(None))
   }
 
   // There is no variant with `let a = call(`. Because you either expect void, or specify the type.
@@ -254,6 +338,49 @@ mod tests
 {
   use crate::ffi;
   use crate::ffi::library::getRegistry;
+  use crate::ffi::scope::Scope;
+  // ===============================================================================================
+
+  /// Checks that `.errno()` makes a failed call's errno observable via
+  /// `Scope::lastErrno()` — `open()` on a path that can't exist sets ENOENT.
+  #[test]
+  fn errnoCapturedWhenRequested() -> ()
+  {
+    let errno: Option<i32> = ffi!(|scope| {
+      let libc: Library = scope.load("libc.so.6")?;
+      let fd: i32 =
+        libc.call("open")
+          .arg(c"/no/such/chillffi/test/path")
+          .arg::<i32>(0 /* O_RDONLY */)
+          .errno()
+          .result()?;
+      assert_eq!(fd, -1, "open() on a nonexistent path should fail");
+      Ok(Scope::lastErrno())
+    }).expect("errno capture test failed");
+
+    assert_eq!(errno, Some(libc::ENOENT));
+  }
+
+  /// Checks that without `.errno()` (and no scope/global override), errno is
+  /// not captured — `Scope::lastErrno()` stays `None` even after a call that
+  /// itself set errno.
+  #[test]
+  fn errnoNoneWhenNotRequested() -> ()
+  {
+    let errno: Option<i32> = ffi!(|scope| {
+      let libc: Library = scope.load("libc.so.6")?;
+      let fd: i32 =
+        libc.call("open")
+          .arg(c"/no/such/chillffi/test/path2")
+          .arg::<i32>(0)
+          .result()?; // no .errno()
+      assert_eq!(fd, -1);
+      Ok(Scope::lastErrno())
+    }).expect("errno-off test failed");
+
+    assert_eq!(errno, None);
+  }
+
   // ===============================================================================================
 
   /// Checks that library is removed from registry when explicitly dropped.

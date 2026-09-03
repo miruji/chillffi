@@ -57,6 +57,22 @@ thread_local!{
   /// Panics cannot propagate through C stack frames. `catch_unwind` traps it, 
   /// and this flag becomes the only way to surface the error.
   static CallbackPanicked: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+
+  /// Set by `invokeFFI` immediately after `cif.call()`, only when the request's
+  /// `readErrno` asked for it — `None` otherwise, including for requests that
+  /// never reach `invokeFFI` at all (Alloc, Free, ReadMemory, ...).
+  ///
+  /// `errno` lives inside this clone's memory and nothing else touches it
+  /// between the C call and the read, same reasoning as `CallbackPanicked`.
+  static LastErrno: std::cell::Cell<Option<i32>> = const { std::cell::Cell::new(None) };
+}
+
+/// Takes (and clears) the errno captured by the most recent call, if any.
+/// Called once per request by `zygote::handleRequest` to build the response —
+/// `None` means either the call didn't ask for errno, or this request wasn't a call at all.
+pub(super) fn takeLastErrno() -> Option<i32>
+{
+  LastErrno.with(|e| e.take())
 }
 
 /// Initializes and returns a reference to the global callback registry.
@@ -310,10 +326,10 @@ fn prepareFFIArgs<'a>(
         argsFfi.push(Arg::new(ptr));
       }
       Value::Struct(_) =>
-        // todo:
-        //  Unreachable in practice: the first pass above already returns Err
-        //  on Value::Struct before this loop is ever entered. Kept only for
-        //  match exhaustiveness now that Value::Struct exists.
+      // todo:
+      //  Unreachable in practice: the first pass above already returns Err
+      //  on Value::Struct before this loop is ever entered. Kept only for
+      //  match exhaustiveness now that Value::Struct exists.
         unreachable!("Value::Struct rejected in prepareFFIArgs' first pass"),
       Value::None => return Err(FFIError::BadArgument("Cannot pass Value::None".to_string()))
     }
@@ -324,10 +340,23 @@ fn prepareFFIArgs<'a>(
 
 /// Calls the C function by pointer
 /// and wraps the obtained raw result back into the Value enum.
+///
+/// If `readErrno` is set, `errno` is read right after this function's single
+/// `cif.call()` executes (whichever arm matched) — the only code between that
+/// call and the read is trivial Rust value construction (int casts, enum
+/// wrapping), nothing that can itself touch `errno`. Stashed into `LastErrno`
+/// for `zygote::handleRequest` to pick up; left `None` when not requested,
+/// so callers that don't need it pay nothing extra.
 #[inline]
-fn invokeFFI(cif: &Cif, codePointer: CodePtr, argsFfi: &[Arg], ffiResultType: &Type) -> Result<Value, FFIError>
+fn invokeFFI(
+  cif: &Cif, 
+  codePointer: CodePtr, 
+  argsFfi: &[Arg], 
+  ffiResultType: &Type, 
+  readErrno: bool
+) -> Result<Value, FFIError>
 {
-  Ok(match ffiResultType
+  let result: Value = match ffiResultType
   {
     Type::None => {
       unsafe { cif.call::<()>(codePointer, argsFfi) };
@@ -400,7 +429,17 @@ fn invokeFFI(cif: &Cif, codePointer: CodePtr, argsFfi: &[Arg], ffiResultType: &T
       return Err(FFIError::Other(
         "returning a struct by value is not implemented — call with an out-param pointer and readDynamicStruct instead".to_string()
       ))
-  })
+  };
+
+  // Immediately after cif.call() (see the doc comment above), before
+  // anything else in the caller's chain — including panic checking in
+  // invokeAtPointer — gets a chance to touch this clone's state.
+  if readErrno {
+    let errno: i32 = unsafe { *libc::__errno_location() };
+    LastErrno.with(|e| e.set(Some(errno)));
+  }
+
+  Ok(result)
 }
 
 /// Safely downcasts a boxed storage entry to a concrete reference type.
@@ -586,11 +625,11 @@ pub(super) fn executeFFI(
 {
   match request
   {
-    FFIRequest::Call { libraryPath, functionName, args, resultType } =>
-      executeCall(libraryPath, functionName, args, resultType, cache),
+    FFIRequest::Call { libraryPath, functionName, args, resultType, readErrno } =>
+      executeCall(libraryPath, functionName, args, resultType, cache, readErrno),
 
-    FFIRequest::CallPointer { pointer, args, resultType } =>
-      executeCallPointer(pointer, args, resultType),
+    FFIRequest::CallPointer { pointer, args, resultType, readErrno } =>
+      executeCallPointer(pointer, args, resultType, readErrno),
 
     FFIRequest::Alloc { length } => {
       let ptr: *mut c_void = unsafe{ libc::malloc(length) };
@@ -656,7 +695,8 @@ fn executeCall(
   functionName: String,
   args: Vec<Value>,
   ffiResultType: Type,
-  cache: &mut FxHashMap<String, Library>
+  cache: &mut FxHashMap<String, Library>,
+  readErrno: bool
 ) -> Result<Value, FFIError>
 {
   // Check arguments for the presence of Value::None before building C ABI types
@@ -686,7 +726,7 @@ fn executeCall(
       .map_err(|_| FFIError::SymbolNotFound { functionName: functionName.clone() })?
   };
 
-  invokeAtPointer(functionPointer as usize, args, ffiResultType)
+  invokeAtPointer(functionPointer as usize, args, ffiResultType, readErrno)
 }
 
 /// Calls a raw function pointer directly — no `dlopen`/`dlsym`, the address
@@ -697,14 +737,15 @@ fn executeCall(
 fn executeCallPointer(
   pointer: usize,
   args: Vec<Value>,
-  ffiResultType: Type
+  ffiResultType: Type,
+  readErrno: bool
 ) -> Result<Value, FFIError>
 {
   if pointer == 0 {
     return Err(FFIError::BadArgument("null function pointer".to_string()));
   }
 
-  invokeAtPointer(pointer, args, ffiResultType)
+  invokeAtPointer(pointer, args, ffiResultType, readErrno)
 }
 
 /// Shared by `executeCall` (address resolved via `dlsym`) and
@@ -713,7 +754,8 @@ fn executeCallPointer(
 fn invokeAtPointer(
   pointer: usize,
   args: Vec<Value>,
-  ffiResultType: Type
+  ffiResultType: Type,
+  readErrno: bool
 ) -> Result<Value, FFIError>
 {
   // Check arguments for the presence of Value::None before building C ABI types
@@ -741,7 +783,7 @@ fn invokeAtPointer(
 
   // Function call
   let codePointer: CodePtr = CodePtr(pointer as *mut c_void);
-  let ffiResult: Value = invokeFFI(&cif, codePointer, &argsFfi, &ffiResultType)?;
+  let ffiResult: Value = invokeFFI(&cif, codePointer, &argsFfi, &ffiResultType, readErrno)?;
 
   // A registered callback may have panicked mid-call (see `trampoline` +
   // `CallbackPanicked`) — the C function still "completed" and ffiResult is
