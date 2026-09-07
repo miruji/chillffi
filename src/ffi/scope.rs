@@ -169,11 +169,14 @@ impl<'g> Scope<'g>
   }
 
   /// Allocates enough zygote heap memory to hold a dynamically-shaped C
-  /// struct with the given field layout. Unlike [`Scope::alloc`], the byte
-  /// size isn't supplied by the caller — there's no Rust type to run
-  /// `size_of` on for a shape that only exists as C source, so guessing it
-  /// by hand is exactly how `malloc(sizeof(struct ...))` bugs happen on a
-  /// new target. It's resolved on the clone side instead, by the same
+  /// struct with the given field layout. 
+  /// 
+  /// Unlike [`Scope::alloc`], the byte size isn't supplied by the caller 
+  /// — there's no Rust type to run `size_of` on for a shape that only
+  /// exists as C source, so guessing it by hand is exactly how 
+  /// `malloc(sizeof(struct ...))` bugs happen on a new target.
+  /// 
+  /// It's resolved on the clone side instead, by the same
   /// ABI-aware layout math [`Scope::readDynamicStruct`]/
   /// [`Scope::writeDynamicStruct`] already use.
   pub fn allocStruct(&self, fields: &[Type]) -> Result<AllocatedMemory<'g>, FFIError>
@@ -193,6 +196,32 @@ impl<'g> Scope<'g>
         _ => Err(FFIError::Other("AllocDynamicStruct returned an unexpected shape".to_string())),
       },
       _ => Err(FFIError::Other("AllocDynamicStruct did not return a pointer+size pair".to_string())),
+    }
+  }
+
+  /// Allocates `length` bytes in the clone's heap with the specified `alignment`.
+  ///
+  /// Uses `posix_memalign` under the hood, so `alignment` must be a power of 2
+  /// and at least the size of a `void*` (typically 8 bytes on 64-bit systems).
+  ///
+  /// This is essential for SIMD types like `__m128` that require 16/32/64-byte alignment,
+  /// which regular `malloc` (and therefore `alloc`) does not guarantee.
+  pub fn allocAligned(&self, length: usize, alignment: usize) -> Result<AllocatedMemory<'g>, FFIError>
+  {
+    let stack: &mut Option<HeavyStack> = unsafe{ &mut *self.guard.inner.get() };
+
+    // Initialization of the heavy stack happens only on the first call to alloc()
+    if stack.is_none() {
+      *stack = Some(HeavyStack{
+        pathResolver: None,
+        readErrno: None
+      });
+    }
+
+    // Memory allocation through zygote with alignment
+    match sendRawRequest(FFIRequest::AllocAligned { length, alignment })? {
+      Value::Pointer(address) => Ok(AllocatedMemory::new(address, length)),
+      _ => Err(FFIError::Other("AllocAligned did not return a pointer".to_string())),
     }
   }
 
@@ -516,7 +545,7 @@ mod tests
   }
 
   // ===============================================================================================
-  
+
   /// Checks that [`Scope::allocStruct`] resolves the correct ABI-aware byte
   /// size for a shape mixing a 4-byte field with an 8-byte pointer field —
   /// on x86_64 that's 16 bytes (4 + 4 padding + 8), not the naively summed 12.
@@ -556,7 +585,7 @@ mod tests
   }
 
   // ===============================================================================================
-  
+
   /// Checks that `Scope::setReadErrno(true)` makes a plain `.result()` call
   /// (no `.errno()` on the call itself) surface errno via `Scope::lastErrno()`.
   #[test]
@@ -575,6 +604,29 @@ mod tests
     }).expect("scope errno default test failed");
 
     assert_eq!(errno, Some(libc::ENOENT));
+  }
+  
+  // ===============================================================================================
+
+  /// Checks that [`Scope::allocAligned`] allocates memory with the requested alignment.
+  #[test]
+  fn allocAligned() -> ()
+  {
+    ffi!(|scope| {
+      // 16-byte alignment (typical for SSE)
+      let mem16: AllocatedMemory = scope.allocAligned(64, 16)?;
+      assert_eq!(mem16.address() % 16, 0, "16-byte alignment not met");
+
+      // 32-byte alignment (typical for AVX)
+      let mem32: AllocatedMemory = scope.allocAligned(64, 32)?;
+      assert_eq!(mem32.address() % 32, 0, "32-byte alignment not met");
+
+      // 64-byte alignment (typical for cache lines or AVX-512)
+      let mem64: AllocatedMemory = scope.allocAligned(64, 64)?;
+      assert_eq!(mem64.address() % 64, 0, "64-byte alignment not met");
+
+      Ok(())
+    }).expect("allocAligned failed");
   }
 
   // ===============================================================================================

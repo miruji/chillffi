@@ -68,6 +68,9 @@ pub(super) enum FFIRequest
   /// on the clone side from `fields`, not guessed by the caller. Response
   /// carries both the pointer and the resolved size (see `executeFFI`).
   AllocDynamicStruct { fields: Vec<Type> },
+  /// Allocates a block of memory with specific alignment.
+  /// Uses `posix_memalign` under the hood — alignment must be a power of 2.
+  AllocAligned { length: usize, alignment: usize },
   /// Frees a previously allocated memory block by its pointer.
   Free { pointer: usize },
 

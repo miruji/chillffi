@@ -650,41 +650,87 @@ pub(super) fn executeFFI(
       Ok(Value::Struct(vec![Value::Pointer(ptr as usize), Value::Usize(size)]))
     },
 
+    FFIRequest::AllocAligned { length, alignment } => {
+      // posix_memalign requires alignment to be at least sizeof(void*)
+      let min_alignment: usize = std::mem::size_of::<*mut c_void>();
+      let align: usize = if alignment < min_alignment { min_alignment } else { alignment };
+
+      // alignment must be a power of 2 (and non-zero)
+      if !align.is_power_of_two() {
+        return Err(FFIError::Other("AllocAligned: alignment must be a power of 2".to_string()));
+      }
+
+      // todo desc
+      let mut ptr: *mut c_void = std::ptr::null_mut();
+      let result: i32 = unsafe { libc::posix_memalign(&mut ptr, align, length) };
+      // todo desc
+      if result != 0 {
+        return Err(FFIError::Other(format!("posix_memalign failed with code {}", result)));
+      }
+      //
+      Ok(Value::Pointer(ptr as usize))
+    },
+
     FFIRequest::Free { pointer } => {
       unsafe{ libc::free(pointer as *mut c_void) };
       Ok(Value::None)
     }
 
     FFIRequest::ReadMemory { pointer, length } => {
-      if pointer == 0 { return Err(FFIError::BadArgument("null pointer".to_string())); }
+      // todo desc
+      if pointer == 0 {
+        return Err(FFIError::BadArgument("null pointer".to_string()));
+      }
+      
+      // todo desc
       let slice: &[u8] = unsafe{ std::slice::from_raw_parts(pointer as *const u8, length) };
       Ok(Value::RawString(slice.to_vec()))
     },
 
     FFIRequest::WriteMemory { pointer, value } => {
-      if pointer == 0 { return Err(FFIError::BadArgument("null pointer".to_string())); }
+      // todo desc
+      if pointer == 0 {
+        return Err(FFIError::BadArgument("null pointer".to_string()));
+      }
+      
+      // todo desc
       let bytes: &[u8] = match &value {
         Value::RawString(v) | Value::CString(v) => v.as_slice(),
         _ => return Err(FFIError::BadArgument("expected RawString or CString for WriteMemory".to_string())),
       };
+      
+      // todo desc
       unsafe{ std::ptr::copy_nonoverlapping(bytes.as_ptr(), pointer as *mut u8, bytes.len()) };
       Ok(Value::None)
     }
 
     FFIRequest::ReadDynamicStruct { pointer, fields } => {
-      if pointer == 0 { return Err(FFIError::BadArgument("null pointer".to_string())); }
+      // todo desc
+      if pointer == 0 {
+        return Err(FFIError::BadArgument("null pointer".to_string()));
+      }
+      
+      // todo desc
       readStructAt(pointer, &fields)
     }
 
     FFIRequest::WriteDynamicStruct { pointer, fields, values } => {
-      if pointer == 0 { return Err(FFIError::BadArgument("null pointer".to_string())); }
+      // todo desc
+      if pointer == 0 {
+        return Err(FFIError::BadArgument("null pointer".to_string()));
+      }
+      
+      // todo desc
       writeStructAt(pointer, &fields, &values)?;
       Ok(Value::None)
     }
 
     FFIRequest::RegisterCallback { id, bytes, argTypes, returnType } => {
+      // todo desc
       let wrapper: ErasedCallable = decode(&bytes)
         .map_err(|e| FFIError::Other(format!("call decode failed: {e}")))?;
+
+      // todo desc
       let cif: Cif = buildCif(&argTypes, &returnType)?;
       let leaked: &mut CallbackWrapper = Box::leak(Box::new(CallbackWrapper {
         closure: wrapper,
@@ -692,6 +738,8 @@ pub(super) fn executeFFI(
         returnType: Box::new(returnType)
       }));
       let closure: Closure = Closure::new(cif, trampoline, leaked);
+
+      // todo desc
       let codeAddr: usize = *closure.code_ptr() as usize;
       let codePointer: *mut c_void = codeAddr as *mut c_void;
       registry().lock().insert(id, CallbackEntry { closure, codePointer });

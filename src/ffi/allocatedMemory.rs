@@ -4,6 +4,7 @@ use std::marker::PhantomData;
 use crate::ffi::errors::FFIError;
 use crate::ffi::library::sendRawRequest;
 use crate::zygote::FFIRequest;
+use bytemuck::{Pod, Zeroable};
 // =================================================================================================
 
 /// AllocatedMemory itself is needed when allocating memory on the Rust side;
@@ -62,9 +63,9 @@ impl<'g> AllocatedMemory<'g>
   pub fn read(&self) -> Result<Vec<u8>, FFIError>
   {
     let val: Value = sendRawRequest(
-      FFIRequest::ReadMemory { 
-        pointer: self.address, 
-        length: self.length 
+      FFIRequest::ReadMemory {
+        pointer: self.address,
+        length: self.length
       }
     )?;
     val.try_into()
@@ -74,11 +75,72 @@ impl<'g> AllocatedMemory<'g>
   pub fn write(&self, value: impl Into<Value>) -> Result<(), FFIError>
   {
     sendRawRequest(
-      FFIRequest::WriteMemory { 
-        pointer: self.address, 
-        value: value.into() 
+      FFIRequest::WriteMemory {
+        pointer: self.address,
+        value: value.into()
       }
     )?;
+    Ok(())
+  }
+
+  // =================================================================================================
+
+  /// Reads the allocated memory as a statically-typed C struct `T`.
+  ///
+  /// `T` must be `#[repr(C)]` and implement [`Pod`] (plain old data) from `bytemuck`.
+  /// The `Pod` bound is checked at compile time — if `T` has padding or non-POD fields,
+  /// the code will simply refuse to compile instead of silently reading garbage.
+  ///
+  /// This eliminates all manual byte parsing: the struct's size and field layout are
+  /// guaranteed correct by the type system rather than by manually calculated offsets.
+  pub fn readStruct<T: Pod + Zeroable>(&self) -> Result<T, FFIError>
+  {
+    let expected_size: usize = std::mem::size_of::<T>();
+    if self.length < expected_size {
+      return Err(FFIError::Other(format!(
+        "readStruct: buffer is {} bytes, but T is {} bytes",
+        self.length, expected_size
+      )));
+    }
+
+    // Read raw bytes from zygote memory
+    let bytes: Vec<u8> = self.read()?;
+    if bytes.len() < expected_size {
+      return Err(FFIError::Other(format!(
+        "readStruct: received {} bytes, expected at least {}",
+        bytes.len(), expected_size
+      )));
+    }
+
+    // pod_read_unaligned reads T by value from raw bytes.
+    // Safety is enforced at compile time by T: Pod (which guarantees
+    // no padding, no uninit, no Drop, no invalid bit patterns).
+    // If T has padding, derive(Pod) would fail and this wouldn't compile.
+    Ok(bytemuck::pod_read_unaligned::<T>(&bytes[..expected_size]))
+  }
+
+  /// Writes a statically-typed C struct `T` into the allocated memory buffer.
+  ///
+  /// `T` must be `#[repr(C)]` and implement [`Pod`] from `bytemuck`.
+  ///
+  /// The entire struct is serialized to bytes and written to the zygote's memory.
+  pub fn writeStruct<T: Pod + Zeroable>(&self, value: &T) -> Result<(), FFIError>
+  {
+    let expected_size: usize = std::mem::size_of::<T>();
+    if self.length < expected_size {
+      return Err(FFIError::Other(format!(
+        "writeStruct: buffer is {} bytes, but T is {} bytes",
+        self.length, expected_size
+      )));
+    }
+
+    // Convert struct to bytes using bytemuck
+    let bytes: &[u8] = bytemuck::bytes_of(value);
+
+    sendRawRequest(FFIRequest::WriteMemory {
+      pointer: self.address,
+      value: Value::RawString(bytes.to_vec())
+    })?;
     Ok(())
   }
 }
@@ -103,6 +165,7 @@ mod tests
   use crate::ffi;
   use crate::ffi::types::Value;
   use crate::ffi::allocatedMemory::AllocatedMemory;
+  use bytemuck::{Pod, Zeroable};
   // ===============================================================================================
 
   /// Checks reading memory via [`AllocatedMemory::read`].
@@ -149,7 +212,7 @@ mod tests
   fn drop() -> ()
   {
     let (addr1, addr2): (usize, usize) = ffi!(|scope| {
-      let addr1: usize = 
+      let addr1: usize =
       {
         let mem: AllocatedMemory = scope.alloc(16)?;
         let a: usize = mem.address();
@@ -165,6 +228,83 @@ mod tests
 
     // If Drop freed the first allocation, malloc may reuse the same address
     assert_eq!(addr1, addr2);
+  }
+
+  // ===============================================================================================
+
+  /// A simple C-like struct for testing readStruct/writeStruct
+  #[repr(C)]
+  #[derive(Copy, Clone, Pod, Zeroable, Debug, PartialEq)]
+  struct TestStruct 
+  {
+    a: i64,
+    b: i64,
+  }
+  
+  /// Checks readStruct and writeStruct roundtrip.
+  #[test]
+  fn readWriteStruct() -> ()
+  {
+    let (original, read): (TestStruct, TestStruct) = ffi!(|scope| {
+      let mem: AllocatedMemory = scope.alloc(std::mem::size_of::<TestStruct>())?;
+
+      let original: TestStruct = TestStruct { a: 42, b: 0x123456789ABCDEF0i64 };
+
+      mem.writeStruct(&original)?;
+
+      let read: TestStruct = mem.readStruct::<TestStruct>()?;
+
+      Ok((original, read))
+    }).expect("writeStruct/readStruct roundtrip failed");
+
+    assert_eq!(original, read, "readStruct should return what was written");
+  }
+
+  /// Checks readStruct from a memset-filled buffer.
+  #[test]
+  fn readStructFromMemset() -> ()
+  {
+    let result: TestStruct = ffi!(|scope| {
+      let mem: AllocatedMemory = scope.alloc(std::mem::size_of::<TestStruct>())?;
+
+      // Use memset to fill with a known pattern first
+      let libc: Library = scope.load("libc.so.6")?;
+      libc.call("memset")
+        .arg(mem.asPointer())
+        .arg::<i32>(0xFF)
+        .arg::<usize>(std::mem::size_of::<TestStruct>())
+        .void()?;
+
+      mem.readStruct::<TestStruct>()
+    }).expect("readStruct from memset failed");
+
+    assert_eq!(result.a, 0xFFFFFFFFFFFFFFFFu64 as i64, "i64 should be 0xFFFFFFFFFFFFFFFF");
+    assert_eq!(result.b, 0xFFFFFFFFFFFFFFFFu64 as i64, "i64 should be 0xFFFFFFFFFFFFFFFF");
+  }
+
+  /// Checks readStruct via FFI call (clock_gettime).
+  #[test]
+  fn readStructFromFFI() -> ()
+  {
+    #[repr(C)]
+    #[derive(Copy, Clone, Pod, Zeroable, Debug)]
+    struct Timespec { secs: i64, nanos: i64 }
+
+    let ts: Timespec = ffi!(|scope| {
+      let libc: Library = scope.load("libc.so.6")?;
+      let mem: AllocatedMemory = scope.alloc(std::mem::size_of::<Timespec>())?;
+
+      libc.call("clock_gettime")
+        .arg::<i32>(0) // CLOCK_REALTIME
+        .arg(mem.asPointer())
+        .void()?;
+
+      mem.readStruct::<Timespec>()
+    }).expect("readStruct from clock_gettime failed");
+
+    // Both fields should be non-zero for a real time
+    assert!(ts.secs > 0, "seconds should be positive, got {}", ts.secs);
+    assert!(ts.nanos >= 0 && ts.nanos < 1_000_000_000, "nanos should be in [0, 1e9), got {}", ts.nanos);
   }
 
   // ===============================================================================================

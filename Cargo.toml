@@ -94,6 +94,10 @@ fxhash = "0.2.1"
 parking_lot = "0.12.5"
 # Fast and compact synchronization primitives without lock poisoning.
 
+bytemuck = { version = "1.25.2", features = ["derive"] }
+# Zero-cost casting of POD types. Used for static repr structures
+# (readStruct<T>) to safely reinterpret raw bytes as typed structs.
+
 # ======================================================================================================================
 
 [lints.rust]
