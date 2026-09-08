@@ -487,6 +487,7 @@ mod tests
   use crate::ffi::library::Library;
   use crate::ffi::scope::Scope;
   use crate::ffi::scope::FFIScope;
+  use crate::platform::{LibcPath, LibmPath};
   // ===============================================================================================
 
   /// Checks explicit memory release via [`Scope::free`].
@@ -494,7 +495,7 @@ mod tests
   fn free() -> ()
   {
     ffi!(|scope| {
-      let libc: Library = scope.load("libc.so.6")?;
+      let libc: Library = scope.load(LibcPath)?;
       let ptr: Pointer = libc.call("malloc").arg::<usize>(16).result()?;
 
       Scope::free(ptr)?;
@@ -507,7 +508,7 @@ mod tests
   fn readMemory() -> ()
   {
     let bytes: Vec<u8> = ffi!(|scope| {
-      let libc: Library = scope.load("libc.so.6")?;
+      let libc: Library = scope.load(LibcPath)?;
       let ptr: Pointer = libc.call("malloc").arg::<usize>(8).result()?;
 
       libc.call("memset")
@@ -530,7 +531,7 @@ mod tests
   fn writeMemory() -> ()
   {
     let len: usize = ffi!(|scope| {
-      let libc: Library = scope.load("libc.so.6")?;
+      let libc: Library = scope.load(LibcPath)?;
       let ptr: Pointer = libc.call("malloc").arg::<usize>(32).result()?;
 
       Scope::writeMemory(ptr, c"hello")?;
@@ -593,7 +594,7 @@ mod tests
   {
     let errno: Option<i32> = ffi!(|scope| {
       scope.setReadErrno(true);
-      let libc: Library = scope.load("libc.so.6")?;
+      let libc: Library = scope.load(LibcPath)?;
       let fd: i32 =
         libc.call("open")
           .arg(c"/no/such/chillffi/scope/path")
@@ -645,11 +646,11 @@ mod tests
       let scope: Scope<'_> = ffiScope.scope();
 
       // 1. load libm, call sqrt(9.0) — shares the same zygote.
-      let libm: Library = scope.load("libm.so.6")?;
+      let libm: Library = scope.load(LibmPath)?;
       let r1: f64 = libm.call("sqrt").arg::<f64>(9.0).result()?;
 
       // 2. load libc, call abs(-7) on the SAME zygote clone.
-      let libc: Library = scope.load("libc.so.6")?;
+      let libc: Library = scope.load(LibcPath)?;
       let _abs: i32 = libc.call("abs").arg::<i32>(-7).result()?;
 
       // 3. scope.alloc + writeMemory + strlen — AllocatedMemory<'g> is

@@ -1,9 +1,12 @@
+mod platform;
+// =================================================================================================
 use crate::ffi::types::primitive::Pointer;
 use chillffi::ffi::allocatedMemory::AllocatedMemory;
 use std::cmp::Ordering;
 use chillffi::callback;
 use chillffi::ffi;
 use chillffi::ffi::types::primitive::Callback;
+use crate::platform::{LibcPath};
 // =================================================================================================
 
 /// Demonstrates passing a Rust closure as a C function pointer to `qsort` via FFI.
@@ -12,8 +15,8 @@ fn main() -> ()
   println!("=== Starting qsort via chillffi ===\n");
 
   let sorted: Vec<i32> = ffi!(|scope| {
-    let libc: Library = scope.load("libc.so.6")?;
-    println!("[ffi!] Loaded libc.so.6");
+    let libc: Library = scope.load(LibcPath)?;
+    println!("[ffi!] Loaded {}", LibcPath);
     
     // Allocate memory inside the clone for the array.
     let mem: AllocatedMemory = scope.alloc(5 * 4)?;

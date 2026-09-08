@@ -1,8 +1,11 @@
+mod platform;
+// =================================================================================================
 use chillffi::ffi::types::Type;
 use chillffi::ffi::allocatedMemory::AllocatedMemory;
 use chillffi::ffi::scope::Scope;
 use chillffi::ffi;
 use chillffi::ffi::types::primitive::DynamicList;
+use crate::platform::LibcPath;
 // =================================================================================================
 
 /// Call clock_gettime and extract fields using dynamic struct layouts.
@@ -12,7 +15,7 @@ fn main() -> ()
   let timespecShape: Vec<Type> = vec![Type::I64, Type::I64];
 
   let (secs, nanos): (i64, i64) = ffi!(|scope| {
-    let libc: Library = scope.load("libc.so.6")?;
+    let libc: Library = scope.load(LibcPath)?;
     
     // Allocate memory for timespec struct (16 bytes)
     let mem: AllocatedMemory = scope.alloc(16)?;

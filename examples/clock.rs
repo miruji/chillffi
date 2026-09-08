@@ -1,5 +1,8 @@
+mod platform;
+// =================================================================================================
 use chillffi::ffi::allocatedMemory::{AllocatedMemory};
 use chillffi::ffi;
+use crate::platform::LibcPath;
 // =================================================================================================
 
 /// Get current real time via libc's clock_gettime
@@ -8,7 +11,7 @@ fn main() -> ()
   // clock_gettime(CLOCK_REALTIME, &timespec) — struct out-param via Alloc/ReadMemory,
   // the case a plain Value::Pointer can't cover on its own.
   let (secs, nanos): (i64, i64) = ffi!(|scope| {
-    let libc: Library = scope.load("libc.so.6")?;
+    let libc: Library = scope.load(LibcPath)?;
 
     // Allocate memory for the out-parameter.
     // struct timespec { time_t tv_sec; long tv_nsec; } — 16 bytes on x86_64 Linux

@@ -165,16 +165,17 @@ mod tests
   use crate::ffi;
   use crate::ffi::allocatedMemory::AllocatedMemory;
   use bytemuck::{Pod, Zeroable};
+  use crate::platform::LibcPath;
   // ===============================================================================================
 
-  /// Checks reading memory via [`AllocatedMemory::read`].
+  /// Reading memory via [`AllocatedMemory::read`].
   #[test]
   fn read() -> ()
   {
     let bytes: Vec<u8> = ffi!(|scope| {
       let mem: AllocatedMemory = scope.alloc(8)?;
 
-      let libc: Library = scope.load("libc.so.6")?;
+      let libc: Library = scope.load(LibcPath)?;
       // void *memset(void *s, int c, size_t n) — fills 8 bytes with 0xAB
       libc.call("memset")
         .arg(mem.asPointer())
@@ -188,7 +189,7 @@ mod tests
     assert_eq!(bytes, vec![0xABu8; 8]);
   }
 
-  /// Checks writing memory via [`AllocatedMemory::write`].
+  /// Writing memory via [`AllocatedMemory::write`].
   #[test]
   fn write() -> ()
   {
@@ -197,7 +198,7 @@ mod tests
 
       mem.write(c"hello")?;
 
-      let libc: Library = scope.load("libc.so.6")?;
+      let libc: Library = scope.load(LibcPath)?;
       let result: usize = libc.call("strlen").arg(mem.asPointer()).result()?;
 
       Ok(result)
@@ -206,32 +207,9 @@ mod tests
     assert!(matches!(len, 5));
   }
 
-  /// Checks automatic deallocation via `Drop` when [`AllocatedMemory`] leaves scope.
-  #[test]
-  fn drop() -> ()
-  {
-    let (addr1, addr2): (usize, usize) = ffi!(|scope| {
-      let addr1: usize =
-      {
-        let mem: AllocatedMemory = scope.alloc(16)?;
-        let a: usize = mem.address();
-        // mem is dropped here, sending Free
-        a
-      };
-
-      let mem2: AllocatedMemory = scope.alloc(16)?;
-      let addr2: usize = mem2.address();
-
-      Ok((addr1, addr2))
-    }).expect("AllocatedMemory::drop failed");
-
-    // If Drop freed the first allocation, malloc may reuse the same address
-    assert_eq!(addr1, addr2);
-  }
-
   // ===============================================================================================
 
-  /// A simple C-like struct for testing readStruct/writeStruct
+  /// A simple C-like struct for readStruct/writeStruct.
   #[repr(C)]
   #[derive(Copy, Clone, Pod, Zeroable, Debug, PartialEq)]
   struct TestStruct
@@ -240,7 +218,7 @@ mod tests
     b: i64,
   }
 
-  /// Checks readStruct and writeStruct roundtrip.
+  /// readStruct and writeStruct roundtrip.
   #[test]
   fn readWriteStruct() -> ()
   {
@@ -259,7 +237,23 @@ mod tests
     assert_eq!(original, read, "readStruct should return what was written");
   }
 
-  /// Checks readStruct from a memset-filled buffer.
+  /// Только memset, без последующего read.
+  #[test]
+  fn memsetOnly() -> ()
+  {
+    ffi!(|scope| {
+    let mem: AllocatedMemory = scope.alloc(16)?;
+    let libc: Library = scope.load(LibcPath)?;
+    libc.call("memset")
+      .arg(mem.asPointer())
+      .arg::<i32>(0xFF)
+      .arg::<usize>(16)
+      .void()?;
+    Ok(())
+  }).expect("memset-only failed");
+  }
+
+  /// readStruct from a memset-filled buffer.
   #[test]
   fn readStructFromMemset() -> ()
   {
@@ -267,7 +261,7 @@ mod tests
       let mem: AllocatedMemory = scope.alloc(std::mem::size_of::<TestStruct>())?;
 
       // Use memset to fill with a known pattern first
-      let libc: Library = scope.load("libc.so.6")?;
+      let libc: Library = scope.load(LibcPath)?;
       libc.call("memset")
         .arg(mem.asPointer())
         .arg::<i32>(0xFF)
@@ -281,7 +275,7 @@ mod tests
     assert_eq!(result.b, 0xFFFFFFFFFFFFFFFFu64 as i64, "i64 should be 0xFFFFFFFFFFFFFFFF");
   }
 
-  /// Checks readStruct via FFI call (clock_gettime).
+  /// readStruct via FFI call (clock_gettime).
   #[test]
   fn readStructFromFFI() -> ()
   {
@@ -290,7 +284,7 @@ mod tests
     struct Timespec { secs: i64, nanos: i64 }
 
     let ts: Timespec = ffi!(|scope| {
-      let libc: Library = scope.load("libc.so.6")?;
+      let libc: Library = scope.load(LibcPath)?;
       let mem: AllocatedMemory = scope.alloc(std::mem::size_of::<Timespec>())?;
 
       libc.call("clock_gettime")

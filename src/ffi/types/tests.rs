@@ -16,7 +16,7 @@ mod tests
   fn signedIntegers() -> ()
   {
     ffi!(|scope| {
-      let libc: Library = scope.load("libc.so.6")?;
+      let libc: Library = scope.load(LibcPath)?;
       
       let resI8: i8 = libc.call("abs").arg::<i8>(-5).result()?;
       assert!(matches!(resI8, 5));
@@ -44,7 +44,7 @@ mod tests
   fn unsignedIntegers() -> ()
   {
     ffi!(|scope| {
-      let libc: Library = scope.load("libc.so.6")?;
+      let libc: Library = scope.load(LibcPath)?;
       
       let resU8: u8 = 
         libc.call("strnlen")
@@ -92,14 +92,14 @@ mod tests
   fn float() -> ()
   {
     let resultF32: f32 = ffi!(|scope| {
-      let libm: Library = scope.load("libm.so.6")?;
+      let libm: Library = scope.load(LibmPath)?;
       Ok( libm.call("sqrtf").arg::<f32>(16.0).result()? )
     }).expect("FFI F32 call failed");
 
     assert!((resultF32 - 4.0).abs() < f32::EPSILON);
 
     let resultF64: f64 = ffi!(|scope| {
-      let libm: Library = scope.load("libm.so.6")?;
+      let libm: Library = scope.load(LibmPath)?;
       Ok(
         libm.call("pow")
           .arg::<f64>(2.0)
@@ -118,7 +118,7 @@ mod tests
   fn bool() -> ()
   {
     let result: bool = ffi!(|scope| {
-      let libc: Library = scope.load("libc.so.6")?;
+      let libc: Library = scope.load(LibcPath)?;
       Ok( libc.call("isalpha").arg(true).result()? )
     }).expect("FFI Bool call failed");
 
@@ -133,7 +133,7 @@ mod tests
   fn pointer() -> ()
   {
     let result: Pointer = ffi!(|scope| {
-      let libc: Library = scope.load("libc.so.6")?;
+      let libc: Library = scope.load(LibcPath)?;
       Ok(
         libc.call("getenv")
           .arg(c"noSuchVar")
@@ -154,7 +154,7 @@ mod tests
   fn pointerRoundtrip() -> ()
   {
     let len: usize = ffi!(|scope| {
-      let libc: Library = scope.load("libc.so.6")?;
+      let libc: Library = scope.load(LibcPath)?;
       let ptr: Pointer = 
         libc.call("strdup")
           .arg(c"hello")
@@ -199,7 +199,7 @@ mod tests
   fn cString() -> ()
   {
     let result: usize = ffi!(|scope| {
-      let libc: Library = scope.load("libc.so.6")?;
+      let libc: Library = scope.load(LibcPath)?;
       Ok(
         libc.call("strlen")
           .arg(c"hello")
@@ -216,7 +216,7 @@ mod tests
   fn string() -> ()
   {
     let result: usize = ffi!(|scope| {
-      let libc: Library = scope.load("libc.so.6")?;
+      let libc: Library = scope.load(LibcPath)?;
       Ok(
         libc.call("strnlen")
           .arg("hello world")
@@ -232,7 +232,7 @@ mod tests
   fn rawString() -> ()
   {
     let result: i32 = ffi!(|scope| {
-      let libc: Library = scope.load("libc.so.6")?;
+      let libc: Library = scope.load(LibcPath)?;
       Ok(
         libc.call("atoi")
           .arg(b"12345\0".to_vec())

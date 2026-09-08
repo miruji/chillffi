@@ -1,6 +1,16 @@
+mod platform;
+
+use crate::platform::StatSymbolName;
+use chillffi::ffi::allocatedMemory::AllocatedMemory;
+// =================================================================================================
+use crate::platform::EtcHostnameString;
+use crate::platform::StSizeOffset;
+use crate::platform::StatSize;
+use crate::platform::EtcHostnameCString;
 use chillffi::ffi::scope::{FFIScope, Scope};
 use chillffi::ffi::library::Library;
 use chillffi::ffi::errors::FFIError;
+use crate::platform::LibcPath;
 // =================================================================================================
 
 /// Get file size via libc's stat using the non-macro FFIScope entry point.
@@ -15,18 +25,18 @@ fn main() -> ()
     let ffiScope: FFIScope = FFIScope::enter()?;
     let scope: Scope<'_> = ffiScope.scope();
 
-    let libc: Library = scope.load("libc.so.6")?;
+    //
+    let libc: Library = scope.load(LibcPath)?;
 
     // Allocate memory for the out-parameter.
-    // struct stat — 144 bytes on x86_64 Linux (glibc)
-    let statMem = scope.alloc(144)?;
+    let statMem: AllocatedMemory = scope.alloc(StatSize)?;
 
-    // Invoke the C function with the allocated pointer.
-    let result: i32 = libc.call("stat")
-      .arg(c"/etc/hostname")
-      .arg(statMem.asPointer())
-      .result()?;
-
+    // Call stat() with path and allocated buffer.
+    let result: i32 = 
+      libc.call(StatSymbolName)
+        .arg(EtcHostnameCString)
+        .arg(statMem.asPointer())
+        .result()?;
     if result != 0 {
       return Err(FFIError::Other("stat() returned non-zero".into()));
     }
@@ -35,14 +45,14 @@ fn main() -> ()
     let bytes: Vec<u8> = statMem.read()?;
     drop(statMem);
 
-    // Parse the raw bytes into a strongly-typed Rust integer (st_size — offset 48).
-    Ok(i64::from_ne_bytes(bytes[48..56].try_into().unwrap()))
+    // Parse st_size from raw bytes
+    Ok(i64::from_ne_bytes(bytes[StSizeOffset..StSizeOffset+8].try_into().unwrap()))
   })().expect("stat() via retained scope failed");
 
   //
   println!("file size = {} bytes", size);
 
-  let expected: u64 = std::fs::metadata("/etc/hostname").expect("metadata").len();
+  let expected: u64 = std::fs::metadata(EtcHostnameString).expect("metadata").len();
   assert_eq!(size as u64, expected);
   println!("ok: stat via libc through retained FFIScope");
 }

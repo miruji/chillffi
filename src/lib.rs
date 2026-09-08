@@ -165,10 +165,12 @@
 
 // =================================================================================================
 
-#[cfg(not(target_os = "linux"))]
-compile_error!("chillffi supports only Linux operating systems.");
-// Currently available only on Linux, although it should work on UNIX in general.
-// But I have not tested it on macOS.
+// Используется для примеров.
+
+#[cfg(test)]
+mod platform {
+  include!(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/platform/mod.rs"));
+}
 
 // =================================================================================================
 

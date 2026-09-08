@@ -1,7 +1,10 @@
+mod platform;
+// =================================================================================================
 use chillffi::ffi::allocatedMemory::AllocatedMemory;
 use chillffi::ffi::errors::FFIError;
 use chillffi::ffi;
 use bytemuck::{Pod, Zeroable};
+use crate::platform::LibcPath;
 // =================================================================================================
 
 /// struct timespec { time_t tv_sec; long tv_nsec; } — 16 bytes on x86_64 Linux.
@@ -19,7 +22,7 @@ struct Timespec { secs: i64, nanos: i64 }
 fn clockGettimeManual() -> Result<(i64, i64), FFIError>
 {
   ffi!(|scope| {
-    let libc: Library = scope.load("libc.so.6")?;
+    let libc: Library = scope.load(LibcPath)?;
     let mem: AllocatedMemory = scope.alloc(16)?;
 
     libc.call("clock_gettime")
@@ -40,7 +43,7 @@ fn clockGettimeManual() -> Result<(i64, i64), FFIError>
 fn clockGettimeTyped() -> Result<Timespec, FFIError>
 {
   ffi!(|scope| {
-    let libc: Library = scope.load("libc.so.6")?;
+    let libc: Library = scope.load(LibcPath)?;
     let mem: AllocatedMemory = scope.alloc(std::mem::size_of::<Timespec>())?;
 
     libc.call("clock_gettime")

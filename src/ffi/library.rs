@@ -344,6 +344,7 @@ mod tests
   use crate::ffi;
   use crate::ffi::library::getRegistry;
   use crate::ffi::scope::Scope;
+  use crate::platform::{LibcPath, LibmPath};
   // ===============================================================================================
 
   /// Checks that `.errno()` makes a failed call's errno observable via
@@ -352,7 +353,7 @@ mod tests
   fn errnoCapturedWhenRequested() -> ()
   {
     let errno: Option<i32> = ffi!(|scope| {
-      let libc: Library = scope.load("libc.so.6")?;
+      let libc: Library = scope.load(LibcPath)?;
       let fd: i32 =
         libc.call("open")
           .arg(c"/no/such/chillffi/test/path")
@@ -373,7 +374,7 @@ mod tests
   fn errnoNoneWhenNotRequested() -> ()
   {
     let errno: Option<i32> = ffi!(|scope| {
-      let libc: Library = scope.load("libc.so.6")?;
+      let libc: Library = scope.load(LibcPath)?;
       let fd: i32 =
         libc.call("open")
           .arg(c"/no/such/chillffi/test/path2")
@@ -393,7 +394,7 @@ mod tests
   fn libraryDrop() -> ()
   {
     let id: usize = ffi!(|scope| {
-      let libm: Library = scope.load("libm.so.6")?;
+      let libm: Library = scope.load(LibmPath)?;
       let id: usize = libm.id();
       drop(libm);
       Ok(id)
@@ -408,7 +409,7 @@ mod tests
   fn libraryAutoDrop() -> ()
   {
     let id: usize = ffi!(|scope| {
-      let libm: Library = scope.load("libm.so.6")?;
+      let libm: Library = scope.load(LibmPath)?;
       let id: usize = libm.id();
       Ok(id)
     }).expect("ffi block failed");
@@ -422,7 +423,7 @@ mod tests
   fn libraryUnload() -> ()
   {
     let id: usize = ffi!(|scope| {
-      let libm: Library = scope.load("libm.so.6")?;
+      let libm: Library = scope.load(LibmPath)?;
       let id: usize = libm.id();
       libm.unload()?;
       Ok(id)
@@ -438,7 +439,7 @@ mod tests
   fn sqrt() -> ()
   {
     let result: f64 = ffi!(|scope| {
-      let libm: Library = scope.load("libm.so.6")?;
+      let libm: Library = scope.load(LibmPath)?;
       Ok( libm.call("sqrt").arg::<f64>(4.0).result()? )
     }).expect("FFI call failed");
 
@@ -450,7 +451,7 @@ mod tests
   fn abs() -> ()
   {
     let result: i32 = ffi!(|scope| {
-      let libm: Library = scope.load("libm.so.6")?;
+      let libm: Library = scope.load(LibmPath)?;
       Ok( libm.call("abs").arg::<i32>(-5).result()? )
     }).expect("FFI call failed");
 
@@ -465,7 +466,7 @@ mod tests
   {
     let results: Vec<f64> = ffi!(|scope| {
       let mut outputs: Vec<f64> = Vec::with_capacity(10);
-      let libm: Library = scope.load("libm.so.6")?;
+      let libm: Library = scope.load(LibmPath)?;
   
       // 10 consecutive calls with a single loaded library
       for i in 1..=10 

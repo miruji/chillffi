@@ -1,0 +1,87 @@
+name: CI
+
+# Мы не проверяем тут warns - это дело ручной проверки и правок.
+# Поэтому этот CI нужен только для проверки сборки и совместимости.
+# Кроме того он позволяет удобно проверять все у себя и делать PR
+# в линейную историю - которая строга залочена без других веток.
+
+on:
+  # Это нужно для обязательной финальной проверки PR.
+  pull_request:
+    branches: [main]
+  # Это нужно для ручной проверки своих изменений;
+  # Не мешает частой проверкой.
+  workflow_dispatch:
+
+concurrency:
+  # github.head_ref есть только для pull_request (имя source-ветки).
+  # github.ref для push (refs/heads/branch-name).
+  # Выражение даёт одинаковый ключ для обоих событий на одной ветке.
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # Разрешаем:
+    # - любые pull_request
+    # - workflow_dispatch только НЕ с main
+    if: github.event_name == 'pull_request' || github.ref != 'refs/heads/main'
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-26.04 # x86_64
+          - ubuntu-24.04 # x86_64
+          - ubuntu-26.04-arm # ARM64
+          - ubuntu-24.04-arm # ARM64
+          - macos-26 # ARM64 (Apple Silicon)
+          - macos-15 # ARM64 (Apple Silicon)
+          - macos-26-intel # x86_64
+          - macos-15-intel # x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2 # Кеширование;
+        with:
+          cache-on-failure: true # Делаем всегда.
+      
+      # Проверка сборки и совместимости.
+      - name: Run tests
+        run: cargo test
+      
+      # Проверка примеров.
+      - name: Run examples
+        shell: bash
+        run: |
+          set -uo pipefail
+          
+          failed=0
+          
+          while read -r name; do
+            echo "==> example: $name"
+          
+            output_file="$(mktemp)"
+          
+            if cargo run --quiet --example "$name" >"$output_file" 2>&1; then
+              echo "    ok"
+              rm -f "$output_file"
+            else
+              echo "    FAILED"
+              cat "$output_file"
+              rm -f "$output_file"
+              failed=1
+            fi
+          
+          done < <(
+            cargo metadata --no-deps --format-version 1 |
+              jq -r '
+                .packages[].targets[]
+                | select(.kind[] == "example")
+                | .name
+              ' |
+              sort -u
+          )
+          
+          exit "$failed"

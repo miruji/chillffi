@@ -441,8 +441,21 @@ fn invokeFFI(
   // Immediately after cif.call() (see the doc comment above), before
   // anything else in the caller's chain — including panic checking in
   // invokeAtPointer — gets a chance to touch this clone's state.
-  if readErrno {
-    let errno: i32 = unsafe { *libc::__errno_location() };
+  if readErrno 
+  {
+    let errno: i32 = unsafe 
+    {
+      #[cfg(target_os = "linux")]
+      {
+        *libc::__errno_location()
+      }
+
+      #[cfg(target_os = "macos")]
+      {
+        *libc::__error()
+      }
+    };
+
     LastErrno.with(|e| e.set(Some(errno)));
   }
 

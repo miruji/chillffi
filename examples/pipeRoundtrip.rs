@@ -1,13 +1,16 @@
+mod platform;
+// =================================================================================================
 use chillffi::ffi::allocatedMemory::AllocatedMemory;
 use chillffi::ffi::errors::FFIError;
 use chillffi::ffi;
+use crate::platform::LibcPath;
 // =================================================================================================
 
 /// Create IPC pipe, write data, and read back via libc.
 fn main() -> ()
 {
   let received: Vec<u8> = ffi!(|scope| {
-    let libc: Library = scope.load("libc.so.6")?;
+    let libc: Library = scope.load(LibcPath)?;
 
     // Allocate memory for pipefd array (2 ints)
     let fdsMem: AllocatedMemory = scope.alloc(8)?; // int pipefd[2]

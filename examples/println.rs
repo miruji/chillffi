@@ -1,13 +1,16 @@
+mod platform;
+// =================================================================================================
 use chillffi::ffi::allocatedMemory::AllocatedMemory;
 use chillffi::ffi::errors::FFIError;
 use chillffi::ffi;
+use crate::platform::LibcPath;
 // =================================================================================================
 
 /// Print custom message via libc's puts
 fn println(text: &str) -> Result<(), FFIError>
 {
   ffi!(|scope| {
-    let libc: Library = scope.load("libc.so.6")?;
+    let libc: Library = scope.load(LibcPath)?;
 
     // C-string null termination
     let mut bytes: Vec<u8> = text.as_bytes().to_vec();

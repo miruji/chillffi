@@ -1,7 +1,10 @@
+mod platform;
+// =================================================================================================
 use chillffi::ffi::types::primitive::{Callback, Pointer};
 use chillffi::callback;
 use chillffi::callvPointer;
 use chillffi::ffi;
+use crate::platform::LibcPath;
 // =================================================================================================
 
 /// Verify signal()'s returned "previous handler" pointer is real and callable.
@@ -10,7 +13,7 @@ fn main() -> ()
   // signal() both takes and returns a function pointer — the case
   // callPointer! exists for: calling an address we didn't get via dlsym.
   ffi!(|scope| {
-    let libc: Library = scope.load("libc.so.6")?;
+    let libc: Library = scope.load(LibcPath)?;
 
     // Register a Rust closure as SIGUSR1's handler.
     let handler: Callback = callback!(scope, [] |signum: i32| -> () {
