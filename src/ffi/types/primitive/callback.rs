@@ -8,5 +8,5 @@ pub struct Callback(pub(crate) u64);
 
 // =================================================================================================
 
-// todo Не понятно, стоит ли его сливать с веткой callback.
-//  По идее они связаны и должны быть вместе.
+// todo It is not clear whether it is worth merging it with the callback branch.
+//  In theory, they are related and should be together.

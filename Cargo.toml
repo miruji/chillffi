@@ -1,6 +1,6 @@
 [package]
 name = "chillffi"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 
 #
@@ -8,6 +8,12 @@ authors = ["miruji <miruji@protonmail.com>"]
 description = "A simple isolated dynamic FFI framework for Rust"
 license-file = "LICENSE.md" # FCL
 readme = "README.md"
+
+# ======================================================================================================================
+
+autobins = false
+autotests = false
+autobenches = false
 
 # ======================================================================================================================
 
@@ -30,13 +36,6 @@ include = [
 documentation = "https://docs.rs/chillffi"
 [package.metadata.docs.rs]
 targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
-
-# ======================================================================================================================
-
-autobins = false
-autoexamples = false
-autotests = false
-autobenches = false
 
 # ======================================================================================================================
 
@@ -129,6 +128,7 @@ unused_unit = "allow"
 option_if_let_else = "allow"
 collapsible_if = "allow"
 too_long_first_doc_paragraph = "allow"
+len_without_is_empty = "allow"
 nursery = { level = "warn", priority = -1 } # At the very bottom
 
 # ======================================================================================================================

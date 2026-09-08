@@ -8,64 +8,83 @@ use crate::ffi::types::primitive::{Callback, Pointer};
 #[derive(Debug, Clone)]
 pub struct Arg(pub(crate) Value);
 
-// =================================================================================================
-
-mod private
+pub mod private
 {
-  use crate::ffi::types::Value;
+  use super::Arg;
 
-  pub trait Sealed
+  pub trait Sealed {}
+
+  pub trait IntoFfiValue
   {
-    /// Converts the type into its internal `Value` representation.
-    fn intoFfiValue(self) -> Value;
+    /// Converts the type into its internal `Value` representation, wrapped in `Arg`.
+    fn intoFfiValue(self) -> Arg;
   }
 }
 
 /// Sealed marker trait for types that can be passed into FFI calls.
-/// 
+///
 /// Prevents external users from constructing or using `Value` directly.
-pub trait FfiArg: private::Sealed {}
+pub trait FfiArg: private::Sealed + private::IntoFfiValue {}
 
-impl<T: private::Sealed> FfiArg for T {}
+impl<T: private::Sealed + private::IntoFfiValue> FfiArg for T {}
+
+// =================================================================================================
+
+// Callback
+
+impl From<Callback> for Arg
+{
+  /// Wraps the callback ID into [`Value::Function`].
+  fn from(callback: Callback) -> Self
+  {
+    Self(Value::Function(callback.0))
+  }
+}
+
+impl private::Sealed for Callback {}
+
+impl private::IntoFfiValue for Callback
+{
+  /// Converts the handle into [`Value::Function`].
+  fn intoFfiValue(self) -> Arg
+  {
+    Arg(Value::Function(self.0))
+  }
+}
+
+// =================================================================================================
 
 /// Implements `Sealed` (-> `FfiArg`) and `From<$type> for Arg` in one shot.
 macro_rules! implSealedArg
 {
   ($type:ty) =>
   {
-    impl private::Sealed for $type
+    impl private::Sealed for $type {}
+
+    impl private::IntoFfiValue for $type
     {
       /// Converts the value through `Value::from`.
-      fn intoFfiValue(self) -> Value { Value::from(self) }
+      fn intoFfiValue(self) -> Arg
+      {
+        Arg(Value::from(self))
+      }
     }
     
     impl From<$type> for Arg
     {
       /// Wraps the value into an `Arg`.
-      fn from(v: $type) -> Self { Self(Value::from(v)) }
+      fn from(v: $type) -> Self
+      {
+        Self(Value::from(v))
+      }
     }
   };
 }
 
-impl From<Callback> for Arg
-{
-  /// Wraps the callback ID into [`Value::Function`].
-  fn from(callback: Callback) -> Self { Self(Value::Function(callback.0)) }
-}
-
 // =================================================================================================
 
-// Callback
+// Implementing conversions for all supported FFI argument types.
 
-impl private::Sealed for Callback
-{
-  /// Converts the handle into [`Value::Function`].
-  fn intoFfiValue(self) -> Value { Value::Function(self.0) }
-}
-
-// =================================================================================================
-
-// Implementing conversions for all supported FFI argument types
 implSealedArg!(u8);
 implSealedArg!(u16);
 implSealedArg!(u32);

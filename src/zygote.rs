@@ -42,11 +42,11 @@ use crate::worker::executeFFI;
 
 /// Hidden startup flag: if it is the first argument — 
 /// this is not the runtime, but the zygote process.
-pub(super) const ZygoteFlag: &str = "__zygote";
+pub const ZygoteFlag: &str = "__zygote";
 
 /// Request for FFI execution, sent entirely to the zygote.
 #[derive(Debug, Serialize, Deserialize)]
-pub(super) enum FFIRequest
+pub enum FFIRequest
 {
   /// Calls a function from a dynamic library with the given arguments and expected return type.
   ///
@@ -98,7 +98,7 @@ pub(super) enum FFIRequest
 
 /// Response to the request with the execution result or error.
 #[derive(Serialize, Deserialize)]
-pub(super) enum FFIResponse
+pub enum FFIResponse
 {
   /// Successful execution with the returned value, plus `errno` captured
   /// immediately after the call — `Some` only if the request asked for it
@@ -110,7 +110,7 @@ pub(super) enum FFIResponse
 }
 
 /// Controls the zygote process and the communication channel with it.
-pub(super) struct ZygoteHandle
+pub struct ZygoteHandle
 {
   /// Child zygote process.
   process: Child,
@@ -128,7 +128,7 @@ impl Drop for ZygoteHandle
 }
 
 /// Global state of the active zygote with synchronized access.
-pub(super) static ZygoteState: OnceLock<Mutex<ZygoteHandle>> = OnceLock::new();
+pub static ZygoteState: OnceLock<Mutex<ZygoteHandle>> = OnceLock::new();
 
 // =================================================================================================
 
@@ -234,7 +234,7 @@ impl Drop for ZygoteGuard
 ///
 /// The process is spawned through Command (fork+exec) — runtime was not warmed up,
 /// there are no extra tasks, there is no metadata heap. The library is not loaded in advance.
-pub (super) fn runAsZygote() -> !
+pub fn runAsZygote() -> !
 {
   // Take the socket directly from STDIN
   let socket: UnixStream = unsafe{ UnixStream::from_raw_fd(libc::STDIN_FILENO) };
@@ -243,7 +243,7 @@ pub (super) fn runAsZygote() -> !
 
 /// Zygote initialization; call once, 
 /// as the very first line of the normal main().
-pub(super) fn initZygote() -> io::Result<()>
+pub fn initZygote() -> io::Result<()>
 {
   let handle: ZygoteHandle = spawnZygote()?;
   ZygoteState.set(Mutex::new(handle))
@@ -261,7 +261,7 @@ pub(super) fn initZygote() -> io::Result<()>
 /// exec() completely replaces the process image,
 /// therefore the Zygote is always born clean, regardless of how "heavy"
 /// the runtime has become by the time of startup.
-pub(super) fn spawnZygote() -> io::Result<ZygoteHandle>
+pub fn spawnZygote() -> io::Result<ZygoteHandle>
 {
   // Creates a socket pair directly in RAM without filesystem involvement
   let (runtimeSocket, zygoteSocket): (UnixStream, UnixStream) = UnixStream::pair()?;
@@ -434,7 +434,7 @@ fn readMessage(socket: &mut UnixStream) -> io::Result<Vec<u8>>
 }
 
 /// Serializes a value into a byte representation.
-pub(super) fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, FFIError>
+pub fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, FFIError>
 {
   let config: Configuration = bincode::config::standard();
   bincode::serde::encode_to_vec(value, config)
@@ -442,7 +442,7 @@ pub(super) fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, FFIError>
 }
 
 /// Deserializes a byte representation back into a value.
-pub(super) fn decode<T: for<'a> Deserialize<'a>>(bytes: &[u8]) -> Result<T, FFIError>
+pub fn decode<T: for<'a> Deserialize<'a>>(bytes: &[u8]) -> Result<T, FFIError>
 {
   let config: Configuration = bincode::config::standard();
   bincode::serde::decode_from_slice(bytes, config)

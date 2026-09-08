@@ -24,17 +24,17 @@ pub struct Sendable<State: Serialize + Send, Output: Primitive>
 
   /// Source code location hash used for target verification.
   siteTag: u64,
-
-  /// todo desc
-  pub(crate) argTypes: Vec<Type>,
-  /// todo desc
-  pub(crate) returnType: Type,
-
+  
   /// The captured variables, as a tuple.
   state: State,
 
   /// Typed, same-process entry point into the closure body.
-  typedFn: fn(&State, &DynamicList) -> Output
+  typedFn: fn(&State, &DynamicList) -> Output,
+
+  /// Argument types captured for target-side signature verification.
+  pub(crate) argTypes: Vec<Type>,
+  /// Return type captured for target-side signature verification.
+  pub(crate) returnType: Type
 }
 
 impl<State: Serialize + Send, Output: Primitive> Sendable<State, Output>
@@ -69,19 +69,19 @@ impl<State: Serialize + Send, Output: Primitive> Sendable<State, Output>
   /// the zygote clone.
   pub fn encode(&self) -> Result<Vec<u8>, CallError>
   {
-    // todo desc
+    // Serialize the captured closure state into bincode bytes.
     let bytes: Vec<u8> = bincode::serde::encode_to_vec(&self.state, bincode::config::standard())
       .map_err(|e| CallError::Encode(e.to_string()))?;
-    
-    // todo desc
+
+    // Assemble the envelope with the type tag, site hash, and payload.
     let envelope: Envelope = Envelope {
       relativeOffset: self.relativeOffset,
       argsOutputTag: typesTagOf(&self.argTypes, &self.returnType),
       siteTag: self.siteTag,
       bytes
     };
-    
-    // todo desc
+
+    // Encode the envelope into the final byte payload.
     bincode::serde::encode_to_vec(&envelope, bincode::config::standard())
       .map_err(|e| CallError::Encode(e.to_string()))
   }

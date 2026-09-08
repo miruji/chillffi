@@ -1,3 +1,4 @@
+use crate::ffi::types::primitive::PrimitiveValue;
 use crate::ffi::errors::FFIError;
 use crate::ffi::types::primitive::Primitive;
 use crate::ffi::types::{Value, Type};
@@ -12,7 +13,10 @@ pub struct Pointer(pub usize);
 impl Primitive for Pointer
 {
   const TypeTag: Type = Type::Pointer;
+}
 
+impl PrimitiveValue for Pointer
+{
   /// Extracts the address from a [`Value::Pointer`].
   fn fromValue(value: Value) -> Result<Self, FFIError>
   {
@@ -24,7 +28,7 @@ impl Primitive for Pointer
   }
 
   /// Converts this [`Pointer`] wrapper into a [`Value::Pointer`].
-  fn toValue(self) -> Value 
+  fn toValue(self) -> Value
   {
     Value::Pointer(self.0)
   }

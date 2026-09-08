@@ -2,6 +2,7 @@ use crate::ffi::callback::Primitive;
 use crate::ffi::callback::Value;
 use crate::ffi::callback::Callable;
 use crate::ffi::callback::DynamicList;
+use crate::ffi::types::primitive::FfiPrimitive;
 // =================================================================================================
 
 /// The type-erased, dynamically callable form of a [`callback!`] closure —
@@ -24,7 +25,7 @@ impl ErasedCallable
   /// Wraps a decoded capture-state tuple plus the macro-generated typed
   /// entry point into the erased, dispatcher-facing callable.
   #[doc(hidden)]
-  pub fn fromStateAndFn<State: Send + 'static, Output: Primitive + 'static>(
+  pub fn fromStateAndFn<State: Send + 'static, Output: FfiPrimitive + 'static>(
     state: State,
     typedFn: fn(&State, &DynamicList) -> Output
   ) -> Self
@@ -34,7 +35,7 @@ impl ErasedCallable
 
   /// Invokes the erased closure with dynamic arguments and returns the
   /// dynamic result.
-  /// 
+  ///
   /// `pub(crate)`: only this crate's dispatcher (running inside the clone).
   pub(crate) fn call(&self, args: DynamicList) -> Value
   {
@@ -44,7 +45,7 @@ impl ErasedCallable
 
 /// In-crate bridge from a macro-generated typed entry point to the dynamic
 /// `Callable<CallbackArgs, Value>` object held by the dispatcher. 
-/// 
+///
 /// The only place where the two worlds meet.
 struct StateFnAdapter<State: Send + 'static, Output: Primitive + 'static>
 {
@@ -55,14 +56,14 @@ struct StateFnAdapter<State: Send + 'static, Output: Primitive + 'static>
   typedFn: fn(&State, &DynamicList) -> Output
 }
 
-impl<State: Send + 'static, Output: Primitive + 'static> 
-  Callable<DynamicList, Value> for StateFnAdapter<State, Output>
+impl<State: Send + 'static, Output: FfiPrimitive + 'static>
+Callable<DynamicList, Value> for StateFnAdapter<State, Output>
 {
   fn call(&self, args: DynamicList) -> Value
   {
     // The typed entry point returns the closure's concrete return type;
     // convert it to the dynamic form the C-side marshalling understands.
-    <Output as Primitive>::toValue((self.typedFn)(&self.state, &args))
+    (self.typedFn)(&self.state, &args).toFfiValue().0
   }
 }
 

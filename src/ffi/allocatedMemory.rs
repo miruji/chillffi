@@ -1,4 +1,4 @@
-use crate::ffi::types::primitive::Pointer;
+use crate::ffi::types::primitive::{FfiArg, Pointer};
 use crate::ffi::types::Value;
 use std::marker::PhantomData;
 use crate::ffi::errors::FFIError;
@@ -72,12 +72,12 @@ impl<'g> AllocatedMemory<'g>
   }
 
   /// Writes a value into the allocated memory block in the zygote.
-  pub fn write(&self, value: impl Into<Value>) -> Result<(), FFIError>
+  pub fn write(&self, value: impl FfiArg) -> Result<(), FFIError>
   {
     sendRawRequest(
       FFIRequest::WriteMemory {
         pointer: self.address,
-        value: value.into()
+        value: value.intoFfiValue().0
       }
     )?;
     Ok(())
@@ -163,7 +163,6 @@ impl<'g> Drop for AllocatedMemory<'g>
 mod tests
 {
   use crate::ffi;
-  use crate::ffi::types::Value;
   use crate::ffi::allocatedMemory::AllocatedMemory;
   use bytemuck::{Pod, Zeroable};
   // ===============================================================================================
@@ -196,7 +195,7 @@ mod tests
     let len: usize = ffi!(|scope| {
       let mem: AllocatedMemory = scope.alloc(32)?;
 
-      mem.write(Value::CString(b"hello".to_vec()))?;
+      mem.write(c"hello")?;
 
       let libc: Library = scope.load("libc.so.6")?;
       let result: usize = libc.call("strlen").arg(mem.asPointer()).result()?;
@@ -235,12 +234,12 @@ mod tests
   /// A simple C-like struct for testing readStruct/writeStruct
   #[repr(C)]
   #[derive(Copy, Clone, Pod, Zeroable, Debug, PartialEq)]
-  struct TestStruct 
+  struct TestStruct
   {
     a: i64,
     b: i64,
   }
-  
+
   /// Checks readStruct and writeStruct roundtrip.
   #[test]
   fn readWriteStruct() -> ()

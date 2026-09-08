@@ -1,7 +1,6 @@
 use crate::errnoPolicy::globalReadErrno;
 use crate::ffi::types::Type;
-use crate::ffi::types::primitive::Primitive;
-use crate::ffi::types::primitive::FfiArg;
+use crate::ffi::types::primitive::{Arg, FfiArg, FfiPrimitive};
 use crate::ffi::types::Value;
 use crate::ffi::scope::currentScopeReadErrno;
 use std::cell::RefMut;
@@ -81,7 +80,7 @@ pub(super) fn resolveReadErrno(perCall: Option<bool>) -> bool
 {
   perCall
     .unwrap_or_else(|| currentScopeReadErrno()
-    .unwrap_or_else(globalReadErrno))
+      .unwrap_or_else(globalReadErrno))
 }
 
 // =================================================================================================
@@ -136,10 +135,10 @@ fn callById(
   drop(registry);
 
   sendRawRequest(FFIRequest::Call {
-    libraryPath: libraryPath.to_string(), 
-    functionName: functionName.to_string(), 
-    args, 
-    resultType, 
+    libraryPath: libraryPath.to_string(),
+    functionName: functionName.to_string(),
+    args,
+    resultType,
     readErrno
   })
 }
@@ -203,15 +202,15 @@ impl<'g> Drop for Library<'g>
 #[doc(hidden)]
 pub struct CallBuilder<'a, 'g>
 {
-  /// todo desc
+  /// The library against which the call is issued.
   lib: &'a Library<'g>,
-  
-  /// todo desc
+
+  /// Name of the function to look up and call.
   name: String,
-  
-  /// todo desc
+
+  /// Arguments collected for the call, in order.
   args: Vec<Value>,
-  
+
   /// Per-call override of errno capture. `None` falls through to the
   /// enclosing scope's setting, then the global default — see [`resolveReadErrno`].
   readErrno: Option<bool>
@@ -234,7 +233,7 @@ impl<'a, 'g> CallBuilder<'a, 'g>
   #[inline]
   pub fn arg<T: FfiArg>(mut self, arg: T) -> Self
   {
-    self.args.push(arg.intoFfiValue());
+    self.args.push(arg.intoFfiValue().0);
     self
   }
 
@@ -259,7 +258,7 @@ impl<'a, 'g> CallBuilder<'a, 'g>
 
   /// Finalize: execute and return a typed result.
   #[inline]
-  pub fn result<T: Primitive>(self) -> Result<T, FFIError>
+  pub fn result<T: FfiPrimitive>(self) -> Result<T, FFIError>
   {
     let readErrno: bool = resolveReadErrno(self.readErrno);
     self.lib.__call(&self.name, self.args, readErrno)
@@ -290,15 +289,21 @@ impl<'g> Library<'g>
   /// todo It should be completely hidden and not work directly
   #[inline]
   #[doc(hidden)]
-  pub fn __call<T: Primitive>(
-    &self, 
-    functionName: &str, 
-    args: Vec<Value>, 
+  pub(crate) fn __call<T: FfiPrimitive>(
+    &self,
+    functionName: &str,
+    args: Vec<Value>,
     readErrno: bool
   ) -> Result<T, FFIError>
   {
-    let raw: Value = callById(self.libraryId, &self.libraryPath, functionName, args, T::TypeTag, readErrno)?;
-    T::fromValue(raw)
+    let raw: Value = callById(
+      self.libraryId, 
+      &self.libraryPath, 
+      functionName, args, 
+      T::TypeTag, 
+      readErrno
+    )?;
+    T::fromFfiValue(Arg(raw))
   }
 
   /// Fire-and-forget variant: a call without waiting for or typing the result.
@@ -306,9 +311,9 @@ impl<'g> Library<'g>
   /// todo It should be completely hidden and not work directly
   #[inline]
   #[doc(hidden)]
-  pub fn __callv(
-    &self, 
-    functionName: &str, 
+  pub(crate) fn __callv(
+    &self,
+    functionName: &str,
     args: Vec<Value>
   ) -> Result<(), FFIError>
   {

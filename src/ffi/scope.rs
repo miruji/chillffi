@@ -1,5 +1,5 @@
 use crate::errnoPolicy::globalReadErrno;
-use crate::ffi::types::primitive::Arg;
+use crate::ffi::types::primitive::{Arg, FfiArg, FfiPrimitive};
 use crate::ffi::types::primitive::Callback;
 use crate::ffi::types::primitive::DynamicList;
 use crate::ffi::types::primitive::Primitive;
@@ -170,12 +170,12 @@ impl<'g> Scope<'g>
 
   /// Allocates enough zygote heap memory to hold a dynamically-shaped C
   /// struct with the given field layout. 
-  /// 
+  ///
   /// Unlike [`Scope::alloc`], the byte size isn't supplied by the caller 
   /// — there's no Rust type to run `size_of` on for a shape that only
   /// exists as C source, so guessing it by hand is exactly how 
   /// `malloc(sizeof(struct ...))` bugs happen on a new target.
-  /// 
+  ///
   /// It's resolved on the clone side instead, by the same
   /// ABI-aware layout math [`Scope::readDynamicStruct`]/
   /// [`Scope::writeDynamicStruct`] already use.
@@ -247,11 +247,11 @@ impl<'g> Scope<'g>
   }
 
   /// Writes data from [`Value`] into the clone's memory at `pointer`.
-  pub fn writeMemory(pointer: impl Into<usize>, value: impl Into<Value>) -> Result<(), FFIError>
+  pub fn writeMemory(pointer: impl Into<usize>, value: impl FfiArg) -> Result<(), FFIError>
   {
     sendRawRequest(FFIRequest::WriteMemory {
       pointer: pointer.into(),
-      value: value.into(),
+      value: value.intoFfiValue().0,
     })?;
     Ok(())
   }
@@ -298,7 +298,7 @@ impl<'g> Scope<'g>
   /// call (C ABI functions returning function pointers exist — e.g. libc's
   /// `signal()` both takes and returns one), or read out of a dispatch table
   /// via `readMemory`.
-  pub fn callPointer<T: Primitive>(
+  pub fn callPointer<T: FfiPrimitive>(
     &self,
     pointer: impl Into<usize>,
     args: Vec<Arg>
@@ -322,7 +322,7 @@ impl<'g> Scope<'g>
   /// no builder to chain `.errno()` onto, since `callPointer` skips `CallBuilder`
   /// entirely. Read it back via [`Scope::lastErrno`].
   #[inline]
-  pub fn callPointerErrno<T: Primitive>(
+  pub fn callPointerErrno<T: FfiPrimitive>(
     &self,
     pointer: impl Into<usize>,
     args: Vec<Arg>
@@ -334,7 +334,7 @@ impl<'g> Scope<'g>
   /// Shared implementation: resolves the effective `readErrno` flag (explicit
   /// override, else scope, else global — same order as `CallBuilder::result`)
   /// and sends the request.
-  fn callPointerImpl<T: Primitive>(
+  fn callPointerImpl<T: FfiPrimitive>(
     &self,
     pointer: impl Into<usize>,
     args: Vec<Arg>,
@@ -349,7 +349,7 @@ impl<'g> Scope<'g>
       resultType: T::TypeTag,
       readErrno
     })?;
-    T::fromValue(raw)
+    T::fromFfiValue(Arg(raw))
   }
 
   /// Returns the errno captured by the most recent call on this thread, if
@@ -378,8 +378,8 @@ impl<'g> Scope<'g>
     sendRawRequest(FFIRequest::RegisterCallback {
       id,
       bytes: f.encode().expect("encode callback"),
-      argTypes: f.argTypes.clone(),
-      returnType: f.returnType.clone()
+      argTypes: f.argTypes,
+      returnType: f.returnType
     }).expect("register callback failed");
 
     Callback(id)
@@ -605,7 +605,7 @@ mod tests
 
     assert_eq!(errno, Some(libc::ENOENT));
   }
-  
+
   // ===============================================================================================
 
   /// Checks that [`Scope::allocAligned`] allocates memory with the requested alignment.
