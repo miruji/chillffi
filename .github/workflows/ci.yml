@@ -1,30 +1,30 @@
 name: CI
 
-# Мы не проверяем тут warns - это дело ручной проверки и правок.
-# Поэтому этот CI нужен только для проверки сборки и совместимости.
-# Кроме того он позволяет удобно проверять все у себя и делать PR
-# в линейную историю - которая строга залочена без других веток.
+# We do not check warns here - this is a matter of manual review and fixes.
+# Therefore this CI is only needed for build and compatibility checks.
+# In addition, it allows conveniently checking everything locally and making PRs
+# into a linear history - which is strictly locked without other branches.
 
 on:
-  # Это нужно для обязательной финальной проверки PR.
+  # This is needed for the mandatory final PR check.
   pull_request:
     branches: [main]
-  # Это нужно для ручной проверки своих изменений;
-  # Не мешает частой проверкой.
+  # This is needed for manual checking of one's own changes;
+  # It does not interfere with frequent checks.
   workflow_dispatch:
 
 concurrency:
-  # github.head_ref есть только для pull_request (имя source-ветки).
-  # github.ref для push (refs/heads/branch-name).
-  # Выражение даёт одинаковый ключ для обоих событий на одной ветке.
+  # github.head_ref exists only for pull_request (the name of the source branch).
+  # github.ref is for push (refs/heads/branch-name).
+  # The expression gives the same key for both events on the same branch.
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
   test:
-    # Разрешаем:
-    # - любые pull_request
-    # - workflow_dispatch только НЕ с main
+    # Allow:
+    # - any pull_request;
+    # - workflow_dispatch only NOT from main.
     if: github.event_name == 'pull_request' || github.ref != 'refs/heads/main'
     
     strategy:
@@ -43,15 +43,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2 # Кеширование;
+      - uses: Swatinem/rust-cache@v2 # Caching;
         with:
-          cache-on-failure: true # Делаем всегда.
+          cache-on-failure: true # Always do it.
       
-      # Проверка сборки и совместимости.
+      # Build and compatibility check.
       - name: Run tests
         run: cargo test
       
-      # Проверка примеров.
+      # Examples check.
       - name: Run examples
         shell: bash
         run: |

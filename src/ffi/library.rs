@@ -1,19 +1,19 @@
+use crate::__ffiInternal::ClonedZygote;
 use crate::errnoPolicy::globalReadErrno;
-use crate::ffi::types::Type;
-use crate::ffi::types::primitive::{Arg, FfiArg, FfiPrimitive};
-use crate::ffi::types::Value;
+use crate::ffi::errors::FFIError;
 use crate::ffi::scope::currentScopeReadErrno;
+use crate::ffi::types::primitive::{Arg, FfiArg, FfiPrimitive};
+use crate::ffi::types::Type;
+use crate::ffi::types::Value;
+use crate::zygote::ZygoteState;
+use crate::zygote::{FFIRequest, FFIResponse, ZygoteStack};
+use fxhash::FxHashMap;
+use parking_lot::RwLock;
+use parking_lot::RwLockReadGuard;
 use std::cell::RefMut;
 use std::marker::PhantomData;
-use parking_lot::RwLockReadGuard;
-use parking_lot::RwLock;
-use crate::ffi::errors::FFIError;
-use fxhash::FxHashMap;
-use crate::zygote::ZygoteState;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{OnceLock};
-use crate::__ffiInternal::ClonedZygote;
-use crate::zygote::{FFIRequest, FFIResponse, ZygoteStack};
+use std::sync::OnceLock;
 // =================================================================================================
 
 /// Counter for assigning unique identifiers to libraries.
@@ -66,7 +66,7 @@ thread_local!{
 /// See [`crate::ffi::scope::Scope::lastErrno`] — the public entry point.
 pub(super) fn lastErrno() -> Option<i32>
 {
-  LastErrno.with(|e| e.get())
+  LastErrno.get()
 }
 
 /// Resolves the effective errno-capture flag for a call: an explicit
@@ -103,7 +103,7 @@ pub(super) fn sendRawRequest(request: FFIRequest) -> Result<Value, FFIError>
 
     match zygote.call(request) {
       Ok(FFIResponse::Ok(val, errno)) => {
-        LastErrno.with(|e| e.set(errno));
+        LastErrno.set(errno);
         Ok(val)
       }
       Ok(FFIResponse::Err(err)) => Err(err),
@@ -225,7 +225,7 @@ impl<'a, 'g> CallBuilder<'a, 'g>
       lib,
       name: name.to_string(),
       args: Vec::new(),
-      readErrno: None,
+      readErrno: None
     }
   }
 
@@ -440,7 +440,7 @@ mod tests
   {
     let result: f64 = ffi!(|scope| {
       let libm: Library = scope.load(LibmPath)?;
-      Ok( libm.call("sqrt").arg::<f64>(4.0).result()? )
+      libm.call("sqrt").arg::<f64>(4.0).result()
     }).expect("FFI call failed");
 
     assert!((result - 2.0).abs() < f64::EPSILON);
@@ -452,7 +452,7 @@ mod tests
   {
     let result: i32 = ffi!(|scope| {
       let libm: Library = scope.load(LibmPath)?;
-      Ok( libm.call("abs").arg::<i32>(-5).result()? )
+      libm.call("abs").arg::<i32>(-5).result()
     }).expect("FFI call failed");
 
     assert_eq!(result, 5);

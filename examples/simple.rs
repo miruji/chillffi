@@ -1,7 +1,7 @@
 mod platform;
+use crate::platform::LibmPath;
 // =================================================================================================
 use chillffi::ffi;
-use crate::platform::LibmPath;
 // =================================================================================================
 
 /// Execute math functions from libm
@@ -10,7 +10,7 @@ fn main() -> ()
   // Call sqrt(4.0)
   let result: f64 = ffi!(|scope| {
     let libm: Library = scope.load(LibmPath)?;
-    Ok( libm.call("sqrt").arg::<f64>(4.0).result()? )
+    libm.call("sqrt").arg::<f64>(4.0).result()
   }).expect("FFI call failed");
 
   println!("sqrt(4.0) = {}", result);
@@ -19,7 +19,7 @@ fn main() -> ()
   // Call abs(-5)
   let result: i32 = ffi!(|scope| {
     let libm: Library = scope.load(LibmPath)?;
-    Ok( libm.call("abs").arg::<i32>(-5).result()? )
+    libm.call("abs").arg::<i32>(-5).result()
   }).expect("FFI call failed");
 
   println!("abs(-5) = {}", result);

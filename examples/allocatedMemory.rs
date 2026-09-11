@@ -1,10 +1,10 @@
 mod platform;
-// =================================================================================================
 use crate::platform::StatSymbolName;
+use crate::platform::{EtcHostnameCString, EtcHostnameString, LibcPath, StSizeOffset, StatSize};
+// =================================================================================================
+use chillffi::ffi;
 use chillffi::ffi::allocatedMemory::AllocatedMemory;
 use chillffi::ffi::errors::FFIError;
-use chillffi::ffi;
-use crate::platform::{StSizeOffset, EtcHostnameCString, EtcHostnameString, LibcPath, StatSize};
 // =================================================================================================
 
 /// Call stat() via libc and read file size from struct out-parameter.

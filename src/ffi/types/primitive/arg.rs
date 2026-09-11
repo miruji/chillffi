@@ -1,7 +1,7 @@
+use crate::ffi::types::primitive::{Callback, Pointer};
+use crate::ffi::types::Value;
 use std::ffi::CStr;
 use std::ffi::CString;
-use crate::ffi::types::Value;
-use crate::ffi::types::primitive::{Callback, Pointer};
 // =================================================================================================
 
 /// Public wrapper over [`Value`] for signatures of public methods.

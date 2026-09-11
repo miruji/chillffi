@@ -1,10 +1,10 @@
 mod platform;
+use crate::platform::LibcPath;
 // =================================================================================================
+use bytemuck::{Pod, Zeroable};
+use chillffi::ffi;
 use chillffi::ffi::allocatedMemory::AllocatedMemory;
 use chillffi::ffi::errors::FFIError;
-use chillffi::ffi;
-use bytemuck::{Pod, Zeroable};
-use crate::platform::LibcPath;
 // =================================================================================================
 
 /// struct timespec { time_t tv_sec; long tv_nsec; } — 16 bytes on x86_64 Linux.
@@ -26,7 +26,7 @@ fn clockGettimeManual() -> Result<(i64, i64), FFIError>
     let mem: AllocatedMemory = scope.alloc(16)?;
 
     libc.call("clock_gettime")
-      .arg::<i32>(0 as i32) // CLOCK_REALTIME
+      .arg::<i32>(0) // CLOCK_REALTIME
       .arg(mem.asPointer())
       .void()?;
 
@@ -47,7 +47,7 @@ fn clockGettimeTyped() -> Result<Timespec, FFIError>
     let mem: AllocatedMemory = scope.alloc(std::mem::size_of::<Timespec>())?;
 
     libc.call("clock_gettime")
-      .arg::<i32>(0 as i32) // CLOCK_REALTIME
+      .arg::<i32>(0) // CLOCK_REALTIME
       .arg(mem.asPointer())
       .void()?;
 

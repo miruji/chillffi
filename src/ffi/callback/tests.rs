@@ -4,10 +4,10 @@
 #[cfg(test)]
 mod tests
 {
-  use crate::ffi::callback::Envelope;
-  use crate::ffi::callback::CallError;
   use crate::ffi::callback::decode;
+  use crate::ffi::callback::CallError;
   use crate::ffi::callback::Callable;
+  use crate::ffi::callback::Envelope;
   // ===============================================================================================
 
   /// Round-trips a closure through encode/decode within a single process.

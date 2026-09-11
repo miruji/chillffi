@@ -1,10 +1,10 @@
 mod platform;
+use crate::platform::LibcPath;
 // =================================================================================================
-use chillffi::ffi::types::primitive::{Callback, Pointer};
 use chillffi::callback;
 use chillffi::callvPointer;
 use chillffi::ffi;
-use crate::platform::LibcPath;
+use chillffi::ffi::types::primitive::{Callback, Pointer};
 // =================================================================================================
 
 /// Verify signal()'s returned "previous handler" pointer is real and callable.
@@ -36,7 +36,7 @@ fn main() -> ()
       .result()?;
 
     // Call that address directly, bypassing signal() entirely.
-    callvPointer!(scope, old, 10 as i32)?;
+    callvPointer!(scope, old, 10_i32)?;
 
     Ok(())
   }).expect("signal roundtrip failed");

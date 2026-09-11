@@ -1,6 +1,6 @@
 use chillffi::errnoPolicy::setGlobalReadErrno;
-use chillffi::ffi::scope::Scope;
 use chillffi::ffi;
+use chillffi::ffi::scope::Scope;
 // =================================================================================================
 
 /// Test errno capture using a per-call override, a scope-level default,

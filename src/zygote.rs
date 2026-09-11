@@ -1,7 +1,7 @@
-use crate::worker::takeLastErrno;
-use crate::ffi::types::{Type, Value};
 use crate::ffi::errors::FFIError;
+use crate::ffi::types::{Type, Value};
 use crate::worker::executeFFI;
+use crate::worker::takeLastErrno;
 use fxhash::FxHashMap;
 use ipc_channel::ipc::{self, IpcOneShotServer, IpcReceiver, IpcSender};
 use libloading::Library;
@@ -22,8 +22,10 @@ use std::thread;
        Essentially, this is a pool of cloned zygotes. So there would be 3 of them in total.
        Basically, while one is working, another one is ready to take the hit right after it.
        This should significantly reduce the load in tasks where FFIs go one after another.
-       (Кстати, для перезапуска main зиготы это очень важно - можно не создавать новую грязную,
-       а если 1 умерла - можно клонировать через fork() быстро дубликат для дублирования).
+    1.1.
+       (By the way, for restarting the main zygote this is very important — 
+       you don't have to create a new dirty one, and if one died — you can quickly clone 
+       a duplicate through fork() for duplication).
     2. Dynamic zygote warming. The idea is also simple - depending on the load,
        we increase or decrease the number of cloned zygotes.
        This can be done using different algorithms.

@@ -1,16 +1,15 @@
 mod platform;
-
-use crate::platform::StatSymbolName;
-use chillffi::ffi::allocatedMemory::AllocatedMemory;
-// =================================================================================================
+use crate::platform::EtcHostnameCString;
 use crate::platform::EtcHostnameString;
+use crate::platform::LibcPath;
 use crate::platform::StSizeOffset;
 use crate::platform::StatSize;
-use crate::platform::EtcHostnameCString;
-use chillffi::ffi::scope::{FFIScope, Scope};
-use chillffi::ffi::library::Library;
+use crate::platform::StatSymbolName;
+// =================================================================================================
+use chillffi::ffi::allocatedMemory::AllocatedMemory;
 use chillffi::ffi::errors::FFIError;
-use crate::platform::LibcPath;
+use chillffi::ffi::library::Library;
+use chillffi::ffi::scope::{FFIScope, Scope};
 // =================================================================================================
 
 /// Get file size via libc's stat using the non-macro FFIScope entry point.

@@ -1,12 +1,12 @@
 mod platform;
+use crate::platform::LibcPath;
 // =================================================================================================
-use crate::ffi::types::primitive::Pointer;
-use chillffi::ffi::allocatedMemory::AllocatedMemory;
-use std::cmp::Ordering;
 use chillffi::callback;
 use chillffi::ffi;
+use chillffi::ffi::allocatedMemory::AllocatedMemory;
 use chillffi::ffi::types::primitive::Callback;
-use crate::platform::{LibcPath};
+use chillffi::ffi::types::primitive::Pointer;
+use std::cmp::Ordering;
 // =================================================================================================
 
 /// Demonstrates passing a Rust closure as a C function pointer to `qsort` via FFI.

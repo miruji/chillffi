@@ -1,7 +1,7 @@
-use chillffi::ffi::types::Type;
-use chillffi::ffi::types::primitive::{DynamicList, Pointer};
-use chillffi::ffi::scope::Scope;
 use chillffi::ffi;
+use chillffi::ffi::scope::Scope;
+use chillffi::ffi::types::primitive::{DynamicList, Pointer};
+use chillffi::ffi::types::Type;
 // =================================================================================================
 
 /// Example of using a dynamically described C struct as an FFI call result.

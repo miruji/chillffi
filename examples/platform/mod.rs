@@ -1,5 +1,15 @@
-// Это общее хранилище данных для примеров.
-// Т.е. тут нет main.rs - оно игнорируется.
+// This is a common data storage for examples and tests at the same time.
+// There is no main.rs here, so it is ignored as an example.
+// Platform-dependent data can be stored here.
+
+// =================================================================================================
+
+#[cfg(target_os = "linux")]
+pub use linux::*;
+#[cfg(target_os = "macos")]
+pub use macos::*;
+
+// =================================================================================================
 
 #[cfg(target_os = "linux")]
 mod linux 
@@ -22,6 +32,8 @@ mod linux
   #[allow(dead_code)]
   pub const StatSymbolName: &str = "stat";
 }
+
+// =================================================================================================
 
 #[cfg(target_os = "macos")]
 mod macos 
@@ -46,11 +58,7 @@ mod macos
   pub const StatSymbolName: &str = "stat";
   #[cfg(target_arch = "x86_64")]
   #[allow(dead_code)]
-  pub const StatSymbolName: &str = "stat$INODE64"; // Важно: на Intel нужно явно брать 64-bit версию
+  pub const StatSymbolName: &str = "stat$INODE64"; // Important: on Intel you need to explicitly use the 64-bit version.
 }
 
-//
-#[cfg(target_os = "linux")]
-pub use linux::*;
-#[cfg(target_os = "macos")]
-pub use macos::*;
+// =================================================================================================

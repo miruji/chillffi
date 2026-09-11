@@ -39,7 +39,7 @@
 //!     let libm: Library = scope.load("libm.so.6")?;
 //!   
 //!     // Call the "sqrt" function, specifying the expected return type
-//!     Ok( libm.call("sqrt").arg::<f64>(4.0).result()? )
+//!     libm.call("sqrt").arg::<f64>(4.0).result()
 //!     
 //!     // Here libm will be automatically cleared due to drop() when exiting the closure.
 //!     // You can also do this manually via drop(libm) or libm.unload()?
@@ -165,10 +165,10 @@
 
 // =================================================================================================
 
-// Используется для примеров.
-
+/// Used for running tests.
 #[cfg(test)]
-mod platform {
+mod platform 
+{
   include!(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/platform/mod.rs"));
 }
 

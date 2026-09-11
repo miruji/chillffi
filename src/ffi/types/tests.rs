@@ -5,8 +5,8 @@
 mod tests
 {
   use crate::ffi;
-  use std::ffi::CString;
   use crate::ffi::types::{Pointer, Value};
+  use std::ffi::CString;
   // ===============================================================================================
 
   /// Checks all signed integer types 

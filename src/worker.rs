@@ -1,17 +1,19 @@
 use crate::ffi::callback::decode;
 use crate::ffi::callback::ErasedCallable;
-use crate::ffi::types::{Type, Value};
-use parking_lot::{Mutex, RawMutex};
-use std::sync::OnceLock;
-use libffi::middle::Closure;
 use crate::ffi::errors::FFIError;
-use std::any::Any;
-use libloading::Library;
-use libffi::middle::{Arg, Cif, CodePtr};
-use std::ffi::c_void;
+use crate::ffi::types::{Type, Value};
+use crate::zygote::FFIRequest;
 use fxhash::FxHashMap;
+use libffi::middle::Closure;
+use libffi::middle::Type as LibffiType;
+use libffi::middle::{Arg, Cif, CodePtr};
+use libloading::Library;
 use parking_lot::lock_api::MutexGuard;
-use crate::zygote::{FFIRequest};
+use parking_lot::{Mutex, RawMutex};
+use std::any::Any;
+use std::cell::Cell;
+use std::ffi::c_void;
+use std::sync::OnceLock;
 // =================================================================================================
 
 /// Callback registry inside the clone (not parent).
@@ -60,7 +62,10 @@ thread_local!{
   ///
   /// Panics cannot propagate through C stack frames. `catch_unwind` traps it, 
   /// and this flag becomes the only way to surface the error.
-  static CallbackPanicked: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+  static CallbackPanicked: Cell<bool> = const
+  {
+    Cell::new(false)
+  };
 
   /// Set by `invokeFFI` immediately after `cif.call()`, only when the request's
   /// `readErrno` asked for it — `None` otherwise, including for requests that
@@ -68,7 +73,10 @@ thread_local!{
   ///
   /// `errno` lives inside this clone's memory and nothing else touches it
   /// between the C call and the read, same reasoning as `CallbackPanicked`.
-  static LastErrno: std::cell::Cell<Option<i32>> = const { std::cell::Cell::new(None) };
+  static LastErrno: Cell<Option<i32>> = const 
+  {
+    Cell::new(None)
+  };
 }
 
 /// Takes (and clears) the errno captured by the most recent call, if any.
@@ -76,26 +84,27 @@ thread_local!{
 /// `None` means either the call didn't ask for errno, or this request wasn't a call at all.
 pub fn takeLastErrno() -> Option<i32>
 {
-  LastErrno.with(|e| e.take())
+  LastErrno.take()
 }
 
 /// Initializes and returns a reference to the global callback registry.
-fn registry() -> &'static Mutex<FxHashMap<u64, CallbackEntry>> {
+fn registry() -> &'static Mutex<FxHashMap<u64, CallbackEntry>> 
+{
   CallbackRegistry.get_or_init(|| Mutex::new(FxHashMap::default()))
 }
 
 /// The universal C-callable trampoline. 
 ///
 /// Converts C arguments to Rust `Value`s, invokes the closure, and translates the result back.
-unsafe extern "C" fn trampoline(
+extern "C" fn trampoline(
   _cif: &libffi::low::ffi_cif,
-  ret: &mut std::ffi::c_void,
-  args: *const *const std::ffi::c_void,
-  userdata: &CallbackWrapper,
+  ret: &mut c_void,
+  args: *const *const c_void,
+  userdata: &CallbackWrapper
 )
 {
   // Safely construct a slice of raw C argument pointers based on the expected length.
-  let cArgs: &[*const c_void] = unsafe { std::slice::from_raw_parts(args, userdata.argTypes.len()) };
+  let cArgs: &[*const c_void] = unsafe{ std::slice::from_raw_parts(args, userdata.argTypes.len()) };
   let mut rustArgs: Vec<Value> = Vec::with_capacity(userdata.argTypes.len());
 
   // Convert each raw C argument into a safe Rust `Value` according to its expected signature.
@@ -110,7 +119,7 @@ unsafe extern "C" fn trampoline(
   let result: Value =
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| userdata.closure.call(rustArgs.into())))
       .unwrap_or_else(|_| {
-        CallbackPanicked.with(|f| f.set(true));
+        CallbackPanicked.set(true);
         Value::None
       });
   writeRet(ret, result, &userdata.returnType);
@@ -120,27 +129,27 @@ unsafe extern "C" fn trampoline(
 
 /// Maps a Value variant to its corresponding `libffi` C ABI type(s).
 #[inline]
-fn toCifTypes(value: &Value) -> Result<Vec<libffi::middle::Type>, FFIError>
+fn toCifTypes(value: &Value) -> Result<Vec<LibffiType>, FFIError>
 {
   match value
   {
-    Value::U8(_) => Ok(vec![libffi::middle::Type::u8()]),
-    Value::U16(_) => Ok(vec![libffi::middle::Type::u16()]),
-    Value::U32(_) => Ok(vec![libffi::middle::Type::u32()]),
-    Value::U64(_) => Ok(vec![libffi::middle::Type::u64()]),
-    Value::Usize(_) => Ok(vec![libffi::middle::Type::usize()]),
-    Value::I8(_) => Ok(vec![libffi::middle::Type::i8()]),
-    Value::I16(_) => Ok(vec![libffi::middle::Type::i16()]),
-    Value::I32(_) => Ok(vec![libffi::middle::Type::i32()]),
-    Value::I64(_) => Ok(vec![libffi::middle::Type::i64()]),
-    Value::Isize(_) => Ok(vec![libffi::middle::Type::isize()]),
-    Value::F32(_) => Ok(vec![libffi::middle::Type::f32()]),
-    Value::F64(_) => Ok(vec![libffi::middle::Type::f64()]),
-    Value::Bool(_) => Ok(vec![libffi::middle::Type::u8()]),
-    Value::Pointer(_) => Ok(vec![libffi::middle::Type::pointer()]),
-    Value::RawString(_) | Value::CString(_) => Ok(vec![libffi::middle::Type::pointer()]),
-    Value::String(_) => Ok(vec![libffi::middle::Type::pointer(), libffi::middle::Type::usize()]),
-    Value::Function(_) => Ok(vec![libffi::middle::Type::pointer()]),
+    Value::U8(_) => Ok(vec![LibffiType::u8()]),
+    Value::U16(_) => Ok(vec![LibffiType::u16()]),
+    Value::U32(_) => Ok(vec![LibffiType::u32()]),
+    Value::U64(_) => Ok(vec![LibffiType::u64()]),
+    Value::Usize(_) => Ok(vec![LibffiType::usize()]),
+    Value::I8(_) => Ok(vec![LibffiType::i8()]),
+    Value::I16(_) => Ok(vec![LibffiType::i16()]),
+    Value::I32(_) => Ok(vec![LibffiType::i32()]),
+    Value::I64(_) => Ok(vec![LibffiType::i64()]),
+    Value::Isize(_) => Ok(vec![LibffiType::isize()]),
+    Value::F32(_) => Ok(vec![LibffiType::f32()]),
+    Value::F64(_) => Ok(vec![LibffiType::f64()]),
+    Value::Bool(_) => Ok(vec![LibffiType::u8()]),
+    Value::Pointer(_) => Ok(vec![LibffiType::pointer()]),
+    Value::RawString(_) | Value::CString(_) => Ok(vec![LibffiType::pointer()]),
+    Value::String(_) => Ok(vec![LibffiType::pointer(), LibffiType::usize()]),
+    Value::Function(_) => Ok(vec![LibffiType::pointer()]),
     Value::Struct(_) =>
       // todo:
       //  Passing a struct BY VALUE as a call argument is a distinct feature from
@@ -154,7 +163,7 @@ fn toCifTypes(value: &Value) -> Result<Vec<libffi::middle::Type>, FFIError>
   }
 }
 
-impl From<&Type> for libffi::middle::Type
+impl From<&Type> for LibffiType
 {
   /// Specifies how many bytes `libffi` should read for the value.
   #[inline]
@@ -365,59 +374,59 @@ fn invokeFFI(
   let result: Value = match ffiResultType
   {
     Type::None => {
-      unsafe { cif.call::<()>(codePointer, argsFfi) };
+      unsafe{ cif.call::<()>(codePointer, argsFfi) };
       Value::None
     }
     Type::U8 => {
-      let val: u8 = unsafe { cif.call::<u8>(codePointer, argsFfi) };
+      let val: u8 = unsafe{ cif.call::<u8>(codePointer, argsFfi) };
       Value::U8(val)
     }
     Type::U16 => {
-      let val: u16 = unsafe { cif.call::<u16>(codePointer, argsFfi) };
+      let val: u16 = unsafe{ cif.call::<u16>(codePointer, argsFfi) };
       Value::U16(val)
     }
     Type::U32 => {
-      let val: u32 = unsafe { cif.call::<u32>(codePointer, argsFfi) };
+      let val: u32 = unsafe{ cif.call::<u32>(codePointer, argsFfi) };
       Value::U32(val)
     }
     Type::U64 => {
-      let val: u64 = unsafe { cif.call::<u64>(codePointer, argsFfi) };
+      let val: u64 = unsafe{ cif.call::<u64>(codePointer, argsFfi) };
       Value::U64(val)
     }
     Type::Usize => {
-      let val: usize = unsafe { cif.call::<usize>(codePointer, argsFfi) };
+      let val: usize = unsafe{ cif.call::<usize>(codePointer, argsFfi) };
       Value::Usize(val)
     }
     Type::I8 => {
-      let val: i8 = unsafe { cif.call::<i8>(codePointer, argsFfi) };
+      let val: i8 = unsafe{ cif.call::<i8>(codePointer, argsFfi) };
       Value::I8(val)
     }
     Type::I16 => {
-      let val: i16 = unsafe { cif.call::<i16>(codePointer, argsFfi) };
+      let val: i16 = unsafe{ cif.call::<i16>(codePointer, argsFfi) };
       Value::I16(val)
     }
     Type::I32 => {
-      let val: i32 = unsafe { cif.call::<i32>(codePointer, argsFfi) };
+      let val: i32 = unsafe{ cif.call::<i32>(codePointer, argsFfi) };
       Value::I32(val)
     }
     Type::I64 => {
-      let val: i64 = unsafe { cif.call::<i64>(codePointer, argsFfi) };
+      let val: i64 = unsafe{ cif.call::<i64>(codePointer, argsFfi) };
       Value::I64(val)
     }
     Type::Isize => {
-      let val: isize = unsafe { cif.call::<isize>(codePointer, argsFfi) };
+      let val: isize = unsafe{ cif.call::<isize>(codePointer, argsFfi) };
       Value::Isize(val)
     }
     Type::F32 => {
-      let val: f32 = unsafe { cif.call::<f32>(codePointer, argsFfi) };
+      let val: f32 = unsafe{ cif.call::<f32>(codePointer, argsFfi) };
       Value::F32(val)
     }
     Type::F64 => {
-      let val: f64 = unsafe { cif.call::<f64>(codePointer, argsFfi) };
+      let val: f64 = unsafe{ cif.call::<f64>(codePointer, argsFfi) };
       Value::F64(val)
     }
     Type::Bool => {
-      let val: u8 = unsafe { cif.call::<u8>(codePointer, argsFfi) };
+      let val: u8 = unsafe{ cif.call::<u8>(codePointer, argsFfi) };
       Value::Bool(val != 0)
     }
     Type::Pointer => {
@@ -447,7 +456,6 @@ fn invokeFFI(
       {
         *libc::__errno_location()
       }
-
       #[cfg(target_os = "macos")]
       {
         *libc::__error()
@@ -471,36 +479,36 @@ fn downcastRef<T: 'static>(entry: &Box<dyn Any>) -> Result<&T, FFIError>
 // =================================================================================================
 
 /// Constructs a libffi `Cif` (Call Interface) defining the argument and return types.
-fn buildCif(argTypes: &[Type], returnType: &Type) -> Result<libffi::middle::Cif, FFIError>
+fn buildCif(argTypes: &[Type], returnType: &Type) -> Result<Cif, FFIError>
 {
-  let mut argsTypes: Vec<libffi::middle::Type> = Vec::with_capacity(argTypes.len());
+  let mut argsTypes: Vec<LibffiType> = Vec::with_capacity(argTypes.len());
   for t in argTypes {
-    argsTypes.push(libffi::middle::Type::from(t));
+    argsTypes.push(LibffiType::from(t));
   }
-  let returnType: libffi::middle::Type = libffi::middle::Type::from(returnType);
-  Ok(libffi::middle::Cif::new(argsTypes, returnType))
+  let returnType: LibffiType = LibffiType::from(returnType);
+  Ok(Cif::new(argsTypes, returnType))
 }
 
 /// Safely reads a raw C pointer and converts it into a Rust `Value` based on the specified `Type`.
-fn readArg(ptr: *const std::ffi::c_void, t: &Type) -> Value
+fn readArg(ptr: *const c_void, t: &Type) -> Value
 {
   match t
   {
     Type::None => Value::None,
-    Type::U8 => Value::U8(unsafe { *(ptr as *const u8) }),
-    Type::U16 => Value::U16(unsafe { *(ptr as *const u16) }),
-    Type::U32 => Value::U32(unsafe { *(ptr as *const u32) }),
-    Type::U64 => Value::U64(unsafe { *(ptr as *const u64) }),
-    Type::Usize => Value::Usize(unsafe { *(ptr as *const usize) }),
-    Type::I8 => Value::I8(unsafe { *(ptr as *const i8) }),
-    Type::I16 => Value::I16(unsafe { *(ptr as *const i16) }),
-    Type::I32 => Value::I32(unsafe { *(ptr as *const i32) }),
-    Type::I64 => Value::I64(unsafe { *(ptr as *const i64) }),
-    Type::Isize => Value::Isize(unsafe { *(ptr as *const isize) }),
-    Type::F32 => Value::F32(unsafe { *(ptr as *const f32) }),
-    Type::F64 => Value::F64(unsafe { *(ptr as *const f64) }),
-    Type::Bool => Value::Bool(unsafe { *(ptr as *const u8) != 0 }),
-    Type::Pointer => Value::Pointer(unsafe { *(ptr as *const usize) }),
+    Type::U8 => Value::U8(unsafe{ *(ptr as *const u8) }),
+    Type::U16 => Value::U16(unsafe{ *(ptr as *const u16) }),
+    Type::U32 => Value::U32(unsafe{ *(ptr as *const u32) }),
+    Type::U64 => Value::U64(unsafe{ *(ptr as *const u64) }),
+    Type::Usize => Value::Usize(unsafe{ *(ptr as *const usize) }),
+    Type::I8 => Value::I8(unsafe{ *(ptr as *const i8) }),
+    Type::I16 => Value::I16(unsafe{ *(ptr as *const i16) }),
+    Type::I32 => Value::I32(unsafe{ *(ptr as *const i32) }),
+    Type::I64 => Value::I64(unsafe{ *(ptr as *const i64) }),
+    Type::Isize => Value::Isize(unsafe{ *(ptr as *const isize) }),
+    Type::F32 => Value::F32(unsafe{ *(ptr as *const f32) }),
+    Type::F64 => Value::F64(unsafe{ *(ptr as *const f64) }),
+    Type::Bool => Value::Bool(unsafe{ *(ptr as *const u8) != 0 }),
+    Type::Pointer => Value::Pointer(unsafe{ *(ptr as *const usize) }),
     Type::Struct(fields) =>
       // Struct-typed callback arguments (e.g. a qsort-style comparator taking
       // a struct by value): `ptr` points to the struct's own bytes, exactly
@@ -519,15 +527,14 @@ fn readArg(ptr: *const std::ffi::c_void, t: &Type) -> Value
 /// alignment, nested structs included), never assumed by hand here.
 fn structLayout(fields: &[Type]) -> Result<(Vec<usize>, usize), FFIError>
 {
-  let mut ffiType: libffi::middle::Type =
-    libffi::middle::Type::structure(fields.iter().map(libffi::middle::Type::from));
+  let mut ffiType: LibffiType = LibffiType::structure(fields.iter().map(LibffiType::from));
 
   let offsets: Vec<usize> = ffiType
     .struct_offsets(libffi::middle::ffi_abi_FFI_DEFAULT_ABI)
     .map_err(|e| FFIError::Other(format!("struct_offsets failed: {:?}", e)))?;
 
   // Only valid to read after struct_offsets() — it's what lays the type out.
-  let size: usize = unsafe { (*ffiType.as_raw_ptr()).size };
+  let size: usize = unsafe{ (*ffiType.as_raw_ptr()).size };
   Ok((offsets, size))
 }
 
@@ -563,20 +570,20 @@ fn writeFieldAt(ptr: usize, value: &Value, t: &Type) -> Result<(), FFIError>
   match (t, value)
   {
     (Type::None, Value::None) => {},
-    (Type::U8, Value::U8(v)) => unsafe { *(ptr as *mut u8) = *v },
-    (Type::U16, Value::U16(v)) => unsafe { *(ptr as *mut u16) = *v },
-    (Type::U32, Value::U32(v)) => unsafe { *(ptr as *mut u32) = *v },
-    (Type::U64, Value::U64(v)) => unsafe { *(ptr as *mut u64) = *v },
-    (Type::Usize, Value::Usize(v)) => unsafe { *(ptr as *mut usize) = *v },
-    (Type::I8, Value::I8(v)) => unsafe { *(ptr as *mut i8) = *v },
-    (Type::I16, Value::I16(v)) => unsafe { *(ptr as *mut i16) = *v },
-    (Type::I32, Value::I32(v)) => unsafe { *(ptr as *mut i32) = *v },
-    (Type::I64, Value::I64(v)) => unsafe { *(ptr as *mut i64) = *v },
-    (Type::Isize, Value::Isize(v)) => unsafe { *(ptr as *mut isize) = *v },
-    (Type::F32, Value::F32(v)) => unsafe { *(ptr as *mut f32) = *v },
-    (Type::F64, Value::F64(v)) => unsafe { *(ptr as *mut f64) = *v },
-    (Type::Bool, Value::Bool(v)) => unsafe { *(ptr as *mut u8) = if *v { 1 } else { 0 } },
-    (Type::Pointer, Value::Pointer(v)) => unsafe { *(ptr as *mut usize) = *v },
+    (Type::U8, Value::U8(v)) => unsafe{ *(ptr as *mut u8) = *v },
+    (Type::U16, Value::U16(v)) => unsafe{ *(ptr as *mut u16) = *v },
+    (Type::U32, Value::U32(v)) => unsafe{ *(ptr as *mut u32) = *v },
+    (Type::U64, Value::U64(v)) => unsafe{ *(ptr as *mut u64) = *v },
+    (Type::Usize, Value::Usize(v)) => unsafe{ *(ptr as *mut usize) = *v },
+    (Type::I8, Value::I8(v)) => unsafe{ *(ptr as *mut i8) = *v },
+    (Type::I16, Value::I16(v)) => unsafe{ *(ptr as *mut i16) = *v },
+    (Type::I32, Value::I32(v)) => unsafe{ *(ptr as *mut i32) = *v },
+    (Type::I64, Value::I64(v)) => unsafe{ *(ptr as *mut i64) = *v },
+    (Type::Isize, Value::Isize(v)) => unsafe{ *(ptr as *mut isize) = *v },
+    (Type::F32, Value::F32(v)) => unsafe{ *(ptr as *mut f32) = *v },
+    (Type::F64, Value::F64(v)) => unsafe{ *(ptr as *mut f64) = *v },
+    (Type::Bool, Value::Bool(v)) => unsafe{ *(ptr as *mut u8) = if *v { 1 } else { 0 } },
+    (Type::Pointer, Value::Pointer(v)) => unsafe{ *(ptr as *mut usize) = *v },
     _ => return Err(FFIError::Other(format!(
       "writeDynamicStruct: field type {:?} does not match value {:?}", t, value
     ))),
@@ -608,25 +615,25 @@ fn writeStructAt(base: usize, fields: &[Type], values: &[Value]) -> Result<(), F
 }
 
 /// Writes a Rust `Value` back into the raw C return pointer based on the expected `Type`.
-fn writeRet(ret: &mut std::ffi::c_void, value: Value, t: &Type)
+fn writeRet(ret: &mut c_void, value: Value, t: &Type)
 {
   match (t, value)
   {
     (Type::None, _) => {}
-    (Type::U8,  Value::U8(v))  => unsafe { *(ret as *mut std::ffi::c_void as *mut u8)  = v },
-    (Type::U16, Value::U16(v)) => unsafe { *(ret as *mut std::ffi::c_void as *mut u16) = v },
-    (Type::U32, Value::U32(v)) => unsafe { *(ret as *mut std::ffi::c_void as *mut u32) = v },
-    (Type::U64, Value::U64(v)) => unsafe { *(ret as *mut std::ffi::c_void as *mut u64) = v },
-    (Type::Usize, Value::Usize(v)) => unsafe { *(ret as *mut std::ffi::c_void as *mut usize) = v },
-    (Type::I8,  Value::I8(v))  => unsafe { *(ret as *mut std::ffi::c_void as *mut i8)  = v },
-    (Type::I16, Value::I16(v)) => unsafe { *(ret as *mut std::ffi::c_void as *mut i16) = v },
-    (Type::I32, Value::I32(v)) => unsafe { *(ret as *mut std::ffi::c_void as *mut i32) = v },
-    (Type::I64, Value::I64(v)) => unsafe { *(ret as *mut std::ffi::c_void as *mut i64) = v },
-    (Type::Isize, Value::Isize(v)) => unsafe { *(ret as *mut std::ffi::c_void as *mut isize) = v },
-    (Type::F32, Value::F32(v)) => unsafe { *(ret as *mut std::ffi::c_void as *mut f32) = v },
-    (Type::F64, Value::F64(v)) => unsafe { *(ret as *mut std::ffi::c_void as *mut f64) = v },
-    (Type::Bool, Value::Bool(v)) => unsafe { *(ret as *mut std::ffi::c_void as *mut u8) = if v { 1 } else { 0 } },
-    (Type::Pointer, Value::Pointer(v)) => unsafe { *(ret as *mut std::ffi::c_void as *mut usize) = v },
+    (Type::U8,  Value::U8(v))  => unsafe{ *(ret as *mut c_void as *mut u8)  = v }
+    (Type::U16, Value::U16(v)) => unsafe{ *(ret as *mut c_void as *mut u16) = v }
+    (Type::U32, Value::U32(v)) => unsafe{ *(ret as *mut c_void as *mut u32) = v }
+    (Type::U64, Value::U64(v)) => unsafe{ *(ret as *mut c_void as *mut u64) = v }
+    (Type::Usize, Value::Usize(v)) => unsafe{ *(ret as *mut c_void as *mut usize) = v }
+    (Type::I8,  Value::I8(v))  => unsafe{ *(ret as *mut c_void as *mut i8)  = v }
+    (Type::I16, Value::I16(v)) => unsafe{ *(ret as *mut c_void as *mut i16) = v }
+    (Type::I32, Value::I32(v)) => unsafe{ *(ret as *mut c_void as *mut i32) = v }
+    (Type::I64, Value::I64(v)) => unsafe{ *(ret as *mut c_void as *mut i64) = v }
+    (Type::Isize, Value::Isize(v)) => unsafe{ *(ret as *mut c_void as *mut isize) = v }
+    (Type::F32, Value::F32(v)) => unsafe{ *(ret as *mut c_void as *mut f32) = v }
+    (Type::F64, Value::F64(v)) => unsafe{ *(ret as *mut c_void as *mut f64) = v }
+    (Type::Bool, Value::Bool(v)) => unsafe{ *(ret as *mut c_void as *mut u8) = if v { 1 } else { 0 } }
+    (Type::Pointer, Value::Pointer(v)) => unsafe{ *(ret as *mut c_void as *mut usize) = v }
     _ => {}
   }
 }
@@ -651,7 +658,7 @@ pub fn executeFFI(
       let ptr: *mut c_void = unsafe{ libc::malloc(length) };
       if ptr.is_null() { return Err(FFIError::Other("malloc returned null".to_string())); }
       Ok(Value::Pointer(ptr as usize))
-    },
+    }
 
     FFIRequest::AllocDynamicStruct { fields } => {
       // Same layout math ReadDynamicStruct/WriteDynamicStruct already rely
@@ -664,11 +671,11 @@ pub fn executeFFI(
       // needs both (`AllocatedMemory` tracks its own length) and doesn't
       // have libffi's struct layout math available to recompute size itself.
       Ok(Value::Struct(vec![Value::Pointer(ptr as usize), Value::Usize(size)]))
-    },
+    }
 
     FFIRequest::AllocAligned { length, alignment } => {
       // posix_memalign requires alignment to be at least sizeof(void*)
-      let min_alignment: usize = std::mem::size_of::<*mut c_void>();
+      let min_alignment: usize = size_of::<*mut c_void>();
       let align: usize = if alignment < min_alignment { min_alignment } else { alignment };
 
       // alignment must be a power of 2 (and non-zero)
@@ -678,14 +685,14 @@ pub fn executeFFI(
 
       // Prepare an out-parameter for posix_memalign.
       let mut ptr: *mut c_void = std::ptr::null_mut();
-      let result: i32 = unsafe { libc::posix_memalign(&mut ptr, align, length) };
+      let result: i32 = unsafe{ libc::posix_memalign(&mut ptr, align, length) };
       // Non-zero return means posix_memalign failed (e.g. bad alignment).
       if result != 0 {
         return Err(FFIError::Other(format!("posix_memalign failed with code {}", result)));
       }
       //
       Ok(Value::Pointer(ptr as usize))
-    },
+    }
 
     FFIRequest::Free { pointer } => {
       unsafe{ libc::free(pointer as *mut c_void) };
@@ -701,7 +708,7 @@ pub fn executeFFI(
       // Treat the pointer as a byte slice of the requested length.
       let slice: &[u8] = unsafe{ std::slice::from_raw_parts(pointer as *const u8, length) };
       Ok(Value::RawString(slice.to_vec()))
-    },
+    }
 
     FFIRequest::WriteMemory { pointer, value } => {
       // Reject a null pointer
@@ -731,9 +738,7 @@ pub fn executeFFI(
       };
 
       // Copy the bytes into the target process memory.
-      unsafe {
-        std::ptr::copy_nonoverlapping(owned.as_ptr(), pointer as *mut u8, owned.len());
-      }
+      unsafe{ std::ptr::copy_nonoverlapping(owned.as_ptr(), pointer as *mut u8, owned.len()); }
       Ok(Value::None)
     }
 
@@ -794,7 +799,8 @@ fn executeCall(
 ) -> Result<Value, FFIError>
 {
   // Check arguments for the presence of Value::None before building C ABI types
-  for (index, arg) in args.iter().enumerate() {
+  for (index, arg) in args.iter().enumerate() 
+  {
     if matches!(arg, Value::None) {
       return Err(FFIError::BadArgument(format!("Cannot pass Value::None as argument at index {}", index)));
     }
@@ -804,8 +810,9 @@ fn executeCall(
   // All resources will be automatically released when the process terminates.
 
   // Retrieve the library from the cache or load it from disk on the first call
-  if !cache.contains_key(&libraryPath) {
-    let lib: Library = unsafe {
+  if !cache.contains_key(&libraryPath) 
+  {
+    let lib: Library = unsafe{
       Library::new(&libraryPath)
         .map_err(|e| FFIError::LibraryLoadFailed { libraryPath: libraryPath.clone(), message: e.to_string() })?
     };
@@ -814,11 +821,12 @@ fn executeCall(
   let library: &Library = cache.get(&libraryPath).unwrap();
 
   // Get the function pointer
-  let functionPointer: *mut c_void = unsafe {
-    *library
-      .get::<*mut c_void>(functionName.as_bytes())
-      .map_err(|_| FFIError::SymbolNotFound { functionName: functionName.clone() })?
-  };
+  let functionPointer: *mut c_void = 
+    unsafe{
+      *library
+        .get::<*mut c_void>(functionName.as_bytes())
+        .map_err(|_| FFIError::SymbolNotFound { functionName: functionName.clone() })?
+    };
 
   invokeAtPointer(functionPointer as usize, args, ffiResultType, readErrno)
 }
@@ -853,19 +861,20 @@ fn invokeAtPointer(
 ) -> Result<Value, FFIError>
 {
   // Check arguments for the presence of Value::None before building C ABI types
-  for (index, arg) in args.iter().enumerate() {
+  for (index, arg) in args.iter().enumerate() 
+  {
     if matches!(arg, Value::None) {
       return Err(FFIError::BadArgument(format!("Cannot pass Value::None as argument at index {}", index)));
     }
   }
 
   // Build argument types for CIF
-  let mut argsTypes: Vec<libffi::middle::Type> = Vec::new();
+  let mut argsTypes: Vec<LibffiType> = Vec::new();
   for arg in &args {
     argsTypes.extend(toCifTypes(arg)?);
   }
 
-  let returnType: libffi::middle::Type = libffi::middle::Type::from(&ffiResultType);
+  let returnType: LibffiType = LibffiType::from(&ffiResultType);
 
   let cif: Cif = Cif::new(argsTypes, returnType);
 
@@ -884,7 +893,7 @@ fn invokeAtPointer(
   // whatever came out of that, but at least one comparison/predicate/etc.
   // ran on a default value instead of the real one. Don't hand back a
   // result the caller would trust as correct.
-  if CallbackPanicked.with(|f| f.replace(false)) {
+  if CallbackPanicked.replace(false) {
     return Err(FFIError::Other("a registered callback panicked during the call".to_string()));
   }
 

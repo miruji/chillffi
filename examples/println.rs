@@ -1,9 +1,9 @@
 mod platform;
+use crate::platform::LibcPath;
 // =================================================================================================
+use chillffi::ffi;
 use chillffi::ffi::allocatedMemory::AllocatedMemory;
 use chillffi::ffi::errors::FFIError;
-use chillffi::ffi;
-use crate::platform::LibcPath;
 // =================================================================================================
 
 /// Print custom message via libc's puts

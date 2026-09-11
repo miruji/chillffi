@@ -1,8 +1,8 @@
 mod platform;
-// =================================================================================================
-use chillffi::ffi::allocatedMemory::{AllocatedMemory};
-use chillffi::ffi;
 use crate::platform::LibcPath;
+// =================================================================================================
+use chillffi::ffi;
+use chillffi::ffi::allocatedMemory::AllocatedMemory;
 // =================================================================================================
 
 /// Get current real time via libc's clock_gettime

@@ -64,8 +64,8 @@ pub(super) fn resolveGlobal(name: &str) -> Option<String>
 mod tests
 {
   use super::*;
-  use std::fs::File;
   use std::env::temp_dir;
+  use std::fs::File;
   // ===============================================================================================
 
   /// Checks that paths containing a slash are ignored.

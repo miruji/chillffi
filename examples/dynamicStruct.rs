@@ -1,11 +1,11 @@
 mod platform;
+use crate::platform::LibcPath;
 // =================================================================================================
-use chillffi::ffi::types::Type;
+use chillffi::ffi;
 use chillffi::ffi::allocatedMemory::AllocatedMemory;
 use chillffi::ffi::scope::Scope;
-use chillffi::ffi;
 use chillffi::ffi::types::primitive::DynamicList;
-use crate::platform::LibcPath;
+use chillffi::ffi::types::Type;
 // =================================================================================================
 
 /// Call clock_gettime and extract fields using dynamic struct layouts.

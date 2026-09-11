@@ -1,7 +1,7 @@
-use crate::ffi::types::primitive::PrimitiveValue;
 use crate::ffi::errors::FFIError;
 use crate::ffi::types::primitive::Primitive;
-use crate::ffi::types::{Value, Type};
+use crate::ffi::types::primitive::PrimitiveValue;
+use crate::ffi::types::{Type, Value};
 // =================================================================================================
 
 /// Wrapper for a raw memory address.

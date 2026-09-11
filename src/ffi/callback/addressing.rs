@@ -1,7 +1,7 @@
-use fxhash::FxHasher;
 use crate::ffi::callback::Type;
-use std::hash::Hasher;
+use fxhash::FxHasher;
 use std::hash::Hash;
+use std::hash::Hasher;
 // =================================================================================================
 
 /// Base load address of the binary containing this very function.
@@ -30,7 +30,7 @@ pub(crate) fn resolveRelative(offset: usize) -> usize
 #[doc(hidden)]
 pub fn tagOf(sourceLocation: &str) -> u64
 {
-  let mut hasher: FxHasher = fxhash::FxHasher::default();
+  let mut hasher: FxHasher = FxHasher::default();
   sourceLocation.hash(&mut hasher);
   hasher.finish()
 }

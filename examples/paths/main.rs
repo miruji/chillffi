@@ -1,6 +1,6 @@
-use chillffi::pathResolver::addGlobalSearchPath;
-use crate::ffi::types::primitive::Pointer;
 use chillffi::ffi;
+use chillffi::ffi::types::primitive::Pointer;
+use chillffi::pathResolver::addGlobalSearchPath;
 // =================================================================================================
 
 /// Test library resolution using direct paths, 
@@ -17,11 +17,9 @@ fn testRawPath() -> ()
 {
   let result: Pointer = ffi!(|scope| {
     let libprint: Library = scope.load("./examples/paths/libprint.so")?;
-    Ok(
-      libprint.call("print")
-        .arg("raw path\n")
-        .result()?
-    )
+    libprint.call("print")
+      .arg("raw path\n")
+      .result()
   }).expect("raw path failed");
 
   assert!(matches!(result, Pointer(0)));
@@ -34,11 +32,9 @@ fn testScopePath() -> ()
   let result: Pointer = ffi!(|scope| {
     scope.addSearchPath("examples/paths");
     let libprint: Library = scope.load("libprint.so")?;
-    Ok(
-      libprint.call("print")
-        .arg("scope path\n")
-        .result()?
-    )
+    libprint.call("print")
+      .arg("scope path\n")
+      .result()
   }).expect("scope path failed");
 
   assert!(matches!(result, Pointer(0)));
@@ -52,11 +48,9 @@ fn testGlobalPath() -> ()
 
   let result: Pointer = ffi!(|scope| {
     let libprint: Library = scope.load("libprint.so")?;
-    Ok(
-      libprint.call("print")
-        .arg("global path\n")
-        .result()?
-    )
+    libprint.call("print")
+      .arg("global path\n")
+      .result()
   }).expect("global path failed");
 
   assert!(matches!(result, Pointer(0)));

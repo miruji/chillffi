@@ -1,8 +1,8 @@
-use chillffi::ffi::types::Type;
-use chillffi::ffi::types::primitive::Arg;
+use chillffi::ffi;
 use chillffi::ffi::allocatedMemory::AllocatedMemory;
 use chillffi::ffi::scope::Scope;
-use chillffi::ffi;
+use chillffi::ffi::types::primitive::Arg;
+use chillffi::ffi::types::Type;
 // =================================================================================================
 
 /// Example of passing a dynamically described C struct as an FFI call parameter.

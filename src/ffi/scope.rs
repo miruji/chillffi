@@ -1,21 +1,21 @@
 use crate::errnoPolicy::globalReadErrno;
-use crate::ffi::types::primitive::{Arg, FfiArg, FfiPrimitive};
+use crate::ffi::allocatedMemory::AllocatedMemory;
+use crate::ffi::callback::sendable::Sendable;
+use crate::ffi::errors::FFIError;
+use crate::ffi::library::{nextLibraryId, registerLibrary, sendRawRequest, Library};
 use crate::ffi::types::primitive::Callback;
 use crate::ffi::types::primitive::DynamicList;
 use crate::ffi::types::primitive::Primitive;
+use crate::ffi::types::primitive::{Arg, FfiArg, FfiPrimitive};
 use crate::ffi::types::{Type, Value};
-use crate::ffi::callback::sendable::Sendable;
-use serde::Serialize;
-use std::sync::atomic::Ordering;
-use std::sync::atomic::AtomicU64;
-use std::cell::RefCell;
-use std::path::PathBuf;
-use crate::pathResolver::{PathResolver, resolveGlobal};
-use std::cell::UnsafeCell;
-use crate::ffi::allocatedMemory::AllocatedMemory;
-use crate::ffi::errors::FFIError;
-use crate::ffi::library::{sendRawRequest, nextLibraryId, registerLibrary, Library};
+use crate::pathResolver::{resolveGlobal, PathResolver};
 use crate::zygote::{ClonedZygote, FFIRequest, ZygoteGuard};
+use serde::Serialize;
+use std::cell::RefCell;
+use std::cell::UnsafeCell;
+use std::path::PathBuf;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 // =================================================================================================
 
 /// Heavy stack or arena for temporary allocations within an [`ffi!`] scope.
@@ -38,7 +38,7 @@ struct HeavyStack
 pub struct ScopeGuard
 {
   /// Lazily initialized internal state of the scope.
-  inner: UnsafeCell<Option<HeavyStack>>
+  inner: UnsafeCell< Option<HeavyStack> >
 }
 
 impl ScopeGuard
@@ -85,7 +85,7 @@ pub(super) fn currentScopeReadErrno() -> Option<bool>
 /// block, and this is checked by the compiler.
 pub struct Scope<'g>
 {
-  guard: &'g ScopeGuard,
+  guard: &'g ScopeGuard
 }
 
 impl<'g> Scope<'g>
@@ -422,7 +422,7 @@ pub struct FFIScope
   _zygote: ZygoteGuard,
   /// Backing storage for the `'g` lifetime borrowed by [`Scope`],
   /// [`AllocatedMemory<'g>`] and [`Library<'g>`].
-  guard: ScopeGuard,
+  guard: ScopeGuard
 }
 
 impl FFIScope
@@ -481,12 +481,12 @@ mod tests
 {
   use crate::ffi;
   use crate::ffi::allocatedMemory::AllocatedMemory;
-  use crate::ffi::types::Type;
-  use crate::ffi::types::primitive::{Pointer, Arg, DynamicList};
   use crate::ffi::errors::FFIError;
   use crate::ffi::library::Library;
-  use crate::ffi::scope::Scope;
   use crate::ffi::scope::FFIScope;
+  use crate::ffi::scope::Scope;
+  use crate::ffi::types::primitive::{Arg, DynamicList, Pointer};
+  use crate::ffi::types::Type;
   use crate::platform::{LibcPath, LibmPath};
   // ===============================================================================================
 
