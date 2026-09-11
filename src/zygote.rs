@@ -1,22 +1,19 @@
 use crate::worker::takeLastErrno;
 use crate::ffi::types::{Type, Value};
-use parking_lot::MutexGuard;
-use parking_lot::Mutex;
-use std::sync::OnceLock;
 use crate::ffi::errors::FFIError;
+use crate::worker::executeFFI;
+use fxhash::FxHashMap;
+use ipc_channel::ipc::{self, IpcOneShotServer, IpcReceiver, IpcSender};
+use libloading::Library;
+use parking_lot::{Mutex, MutexGuard};
+use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::env;
-use std::io::{self, Read, Write};
-use std::os::unix::net::{UnixStream};
-use std::os::fd::{AsRawFd, FromRawFd, RawFd, OwnedFd};
+use std::io;
 use std::path::PathBuf;
-use std::process::{Command, Child, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::sync::OnceLock;
 use std::thread;
-use bincode::config::Configuration;
-use fxhash::FxHashMap;
-use libloading::Library;
-use serde::{Serialize, Deserialize};
-use crate::worker::executeFFI;
 // =================================================================================================
 
 /* todo
@@ -25,6 +22,8 @@ use crate::worker::executeFFI;
        Essentially, this is a pool of cloned zygotes. So there would be 3 of them in total.
        Basically, while one is working, another one is ready to take the hit right after it.
        This should significantly reduce the load in tasks where FFIs go one after another.
+       (Кстати, для перезапуска main зиготы это очень важно - можно не создавать новую грязную,
+       а если 1 умерла - можно клонировать через fork() быстро дубликат для дублирования).
     2. Dynamic zygote warming. The idea is also simple - depending on the load,
        we increase or decrease the number of cloned zygotes.
        This can be done using different algorithms.
@@ -40,7 +39,7 @@ use crate::worker::executeFFI;
 
 // =================================================================================================
 
-/// Hidden startup flag: if it is the first argument — 
+/// Hidden startup flag: if it is the first argument —
 /// this is not the runtime, but the zygote process.
 pub const ZygoteFlag: &str = "__zygote";
 
@@ -85,15 +84,29 @@ pub enum FFIRequest
   /// that don't exist as a Rust type at compile time.
   ReadDynamicStruct { pointer: usize, fields: Vec<Type> },
   /// Writes `values` into a dynamically-typed struct at `pointer`.
-  WriteDynamicStruct { pointer: usize, fields: Vec<Type>, values: Vec<Value> },
+  WriteDynamicStruct {
+    pointer: usize,
+    fields: Vec<Type>,
+    values: Vec<Value>
+  },
 
   /// Parent sends a serialized closure; the clone deserializes and stores it.
-  RegisterCallback { id: u64, bytes: Vec<u8>, argTypes: Vec<Type>, returnType: Type },
-  /// Calls a function directly by its raw memory pointer 
+  RegisterCallback {
+    id: u64,
+    bytes: Vec<u8>,
+    argTypes: Vec<Type>,
+    returnType: Type
+  },
+  /// Calls a function directly by its raw memory pointer
   /// with the provided arguments and expected return type.
   ///
   /// `readErrno`: see [`FFIRequest::Call`].
-  CallPointer { pointer: usize, args: Vec<Value>, resultType: Type, readErrno: bool }
+  CallPointer {
+    pointer: usize,
+    args: Vec<Value>,
+    resultType: Type,
+    readErrno: bool
+  },
 }
 
 /// Response to the request with the execution result or error.
@@ -109,18 +122,76 @@ pub enum FFIResponse
   Err(FFIError)
 }
 
+// =================================================================================================
+// Control plane (Runtime ↔ Main Zygote) over ipc-channel.
+//
+// On macOS ipc-channel uses Mach ports; on Linux/BSD — Unix sockets.
+// This replaces the previous UnixStream::pair + SCM_RIGHTS handoff, which
+// raced under parallel cargo tests on Darwin (FD not connected to the clone).
+// =================================================================================================
+
+/// Commands Runtime → Main Zygote.
+#[derive(Serialize, Deserialize)]
+enum ZygoteCommand
+{
+  /// Ask Main Zygote to `fork` a clone and return IPC endpoints to it.
+  SpawnClone
+}
+
+/// Replies Main Zygote → Runtime.
+///
+/// `IpcSender` / `IpcReceiver` are transferable over ipc-channel themselves
+/// (no manual `sendmsg` / SCM_RIGHTS).
+#[derive(Serialize, Deserialize)]
+enum ZygoteReply
+{
+  /// Clone is ready.
+  ///
+  /// - `requestTx` — Runtime sends [`FFIRequest`] to the clone
+  /// - `responseRx` — Runtime receives [`FFIResponse`] from the clone
+  Clone {
+    pid: i32,
+    requestTx: IpcSender<FFIRequest>,
+    responseRx: IpcReceiver<FFIResponse>
+  },
+  /// `ipc::channel()` or `fork()` failed inside Main Zygote.
+  SpawnFailed
+}
+
+/// First message from Zygote after connecting to Runtime's [`IpcOneShotServer`].
+/// Hands over the control endpoints Runtime needs.
+#[derive(Serialize, Deserialize)]
+struct BootstrapToRuntime
+{
+  commandTx: IpcSender<ZygoteCommand>,
+  replyRx: IpcReceiver<ZygoteReply>
+}
+
+/// First message from a freshly forked clone → Main Zygote (post-fork channel setup).
+/// Carries the ends that Runtime will use; clone keeps the opposite ends locally.
+#[derive(Serialize, Deserialize)]
+struct CloneBootstrap
+{
+  requestTx: IpcSender<FFIRequest>,
+  responseRx: IpcReceiver<FFIResponse>
+}
+
+// =================================================================================================
+
 /// Controls the zygote process and the communication channel with it.
 pub struct ZygoteHandle
 {
   /// Child zygote process.
   process: Child,
-  /// Socket for exchanging requests and responses with the process.
-  pub(super) socket: UnixStream
+  /// Runtime → Main Zygote commands.
+  commandTx: IpcSender<ZygoteCommand>,
+  /// Main Zygote → Runtime replies.
+  replyRx: IpcReceiver<ZygoteReply>
 }
 
 impl Drop for ZygoteHandle
 {
-  /// Terminates the zygote process and removes the temporary socket.
+  /// Terminates the zygote process.
   fn drop(&mut self) -> ()
   {
     let _ = self.process.kill();
@@ -137,54 +208,88 @@ pub struct ClonedZygote
 {
   /// Process PID.
   pub pid: libc::pid_t,
-
-  /// Socket for exchanging requests.
-  pub socket: UnixStream
+  /// Sends FFI requests to the clone.
+  requestTx: IpcSender<FFIRequest>,
+  /// Receives FFI responses from the clone.
+  responseRx: IpcReceiver<FFIResponse>
 }
 
 impl ClonedZygote
 {
-  /// Requests a clone from the main zygote and returns its RAII handle
+  /// Requests a clone from the main zygote and returns its RAII handle.
   pub fn getMeClone() -> io::Result<Self>
   {
-    let mutex: &Mutex<ZygoteHandle> = ZygoteState.get()
-      .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Zygote not initialized"))?;
-    let mut guard: MutexGuard<ZygoteHandle> = mutex.lock();
+    let mutex: &Mutex<ZygoteHandle> = ZygoteState.get().ok_or_else(|| {
+      io::Error::new(io::ErrorKind::NotFound, "Zygote not initialized")
+    })?;
+    let guard: MutexGuard<ZygoteHandle> = mutex.lock();
 
-    // Sends a signal to create a clone
-    writeMessage(&mut guard.socket, &[1u8])?;
+    // Ask Main Zygote to fork a clone and return the IPC ends.
+    guard
+      .commandTx
+      .send(ZygoteCommand::SpawnClone)
+      .map_err(|e| {
+        io::Error::new(
+          io::ErrorKind::BrokenPipe,
+          format!("SpawnClone send failed: {e}"),
+        )
+      })?;
 
-    // Receives the clone PID
-    let mut pidBytes: [u8; 4] = [0u8; 4];
-    guard.socket.read_exact(&mut pidBytes)?;
-    let pid: i32 = i32::from_le_bytes(pidBytes);
-
-    // Read the socket descriptor directly from RAM
-    let fd: RawFd = recvFd(&mut guard.socket)?;
-    let socket: UnixStream = unsafe{ UnixStream::from_raw_fd(fd) };
-
+    let reply: ZygoteReply = guard.replyRx.recv().map_err(|e| {
+      io::Error::new(
+        io::ErrorKind::BrokenPipe,
+        format!("SpawnClone reply failed: {e}"),
+      )
+    })?;
     drop(guard);
-    Ok(Self { pid, socket })
+
+    match reply
+    {
+      ZygoteReply::Clone {
+        pid,
+        requestTx,
+        responseRx
+      } =>
+      {
+        // 0 — explicit failure signal (should not appear if SpawnFailed is used,
+        // but keep the guard for protocol robustness).
+        if pid == 0
+        {
+          return Err(
+            io::Error::other("Main zygote failed to create a clone (pid=0)")
+          );
+        }
+        Ok(Self {
+          pid,
+          requestTx,
+          responseRx
+        })
+      }
+      ZygoteReply::SpawnFailed => Err(
+        io::Error::other("Main zygote failed to create a clone (channel/fork failed)")
+      )
+    }
+    //
   }
 
   /// FFI call inside a specific clone.
-  pub(super) fn call(&mut self, request: FFIRequest) -> Result<FFIResponse, String>
+  pub(super) fn call(&self, request: FFIRequest) -> Result<FFIResponse, String>
   {
-    let bytes: Vec<u8> = encode(&request).map_err(|e| e.to_string())?;
-    writeMessage(&mut self.socket, &bytes)
-      .map_err(|e| format!("Zygote clone IPC failed: {}", e))?;
+    self
+      .requestTx
+      .send(request)
+      .map_err(|e| format!("Zygote clone IPC failed while sending request: {e}"))?;
 
-    let responseBytes: Vec<u8> = readMessage(&mut self.socket)
-      .map_err(|e| format!("Zygote clone IPC failed: {}", e))?;
-    let response: FFIResponse = decode(&responseBytes).map_err(|e| e.to_string())?;
-
-    Ok(response)
+    self
+      .responseRx
+      .recv()
+      .map_err(|e| format!("Zygote clone IPC failed while reading response: {e}"))
   }
 }
 
 impl Drop for ClonedZygote
 {
-  /// When drop() is called, the clone is immediately killed, 
+  /// When drop() is called, the clone is immediately killed,
   /// the main zygote is not affected.
   fn drop(&mut self) -> ()
   {
@@ -194,7 +299,7 @@ impl Drop for ClonedZygote
 
 // =================================================================================================
 
-thread_local!{
+thread_local! {
   /// Zygote stack: each entry into ffi!{} puts a new zygote on top of the stack.
   pub(crate) static ZygoteStack: RefCell<Vec<ClonedZygote>> = const { RefCell::new(Vec::new()) };
 }
@@ -234,20 +339,27 @@ impl Drop for ZygoteGuard
 ///
 /// The process is spawned through Command (fork+exec) — runtime was not warmed up,
 /// there are no extra tasks, there is no metadata heap. The library is not loaded in advance.
+///
+/// Second argument (`argv[2]`) is the [`IpcOneShotServer`] name used to bootstrap
+/// the control channel with the Runtime.
 pub fn runAsZygote() -> !
 {
-  // Take the socket directly from STDIN
-  let socket: UnixStream = unsafe{ UnixStream::from_raw_fd(libc::STDIN_FILENO) };
-  zygoteLoop(socket);
+  let serverName: String = env::args()
+    .nth(2)
+    .expect("zygote: missing IpcOneShotServer name (argv[2])");
+  zygoteLoop(serverName);
 }
 
-/// Zygote initialization; call once, 
+/// Zygote initialization; call once,
 /// as the very first line of the normal main().
 pub fn initZygote() -> io::Result<()>
 {
   let handle: ZygoteHandle = spawnZygote()?;
-  ZygoteState.set(Mutex::new(handle))
-    .map_err(|_| io::Error::new(io::ErrorKind::AlreadyExists, "Zygote already initialized"))?;
+  ZygoteState
+    .set(Mutex::new(handle))
+    .map_err(|_| {
+      io::Error::new(io::ErrorKind::AlreadyExists, "Zygote already initialized")
+    })?;
   thread::spawn(supervisorLoop);
   Ok(())
 }
@@ -261,106 +373,233 @@ pub fn initZygote() -> io::Result<()>
 /// exec() completely replaces the process image,
 /// therefore the Zygote is always born clean, regardless of how "heavy"
 /// the runtime has become by the time of startup.
+///
+/// Bootstrap uses [`IpcOneShotServer`] (Mach ports on macOS, Unix sockets elsewhere)
+/// instead of `UnixStream::pair` + SCM_RIGHTS — that path was racy under parallel
+/// tests on Darwin (Runtime received a dead FD while the clone was still waiting).
 pub fn spawnZygote() -> io::Result<ZygoteHandle>
 {
-  // Creates a socket pair directly in RAM without filesystem involvement
-  let (runtimeSocket, zygoteSocket): (UnixStream, UnixStream) = UnixStream::pair()?;
+  // Creates a one-shot IPC server to establish initial control channel with the zygote.
+  let (server, serverName): (IpcOneShotServer<BootstrapToRuntime>, String) =
+    IpcOneShotServer::new().map_err(io::Error::other)?;
 
-  //
-  let currentExe: PathBuf = env::current_exe()?;
-  // todo Might fail if the path to the executable file 
+  // todo Might fail if the path to the executable file
   //  is too long or there are no permissions?
+  let currentExe: PathBuf = env::current_exe()?;
   let process: Child = Command::new(currentExe)
     .arg(ZygoteFlag)
-    .stdin(Stdio::from(OwnedFd::from(zygoteSocket)))
+    .arg(&serverName)
+    .stdin(Stdio::null())
+    .stdout(Stdio::inherit())
+    .stderr(Stdio::inherit())
     .spawn()?;
 
-  Ok(ZygoteHandle{ process, socket: runtimeSocket })
+  // Zygote connects, sends BootstrapToRuntime { commandTx, replyRx }.
+  // The one-shot receiver side is unused after the first message — control
+  // continues on the embedded commandTx / replyRx pair.
+  let (_rx, bootstrap): (IpcReceiver<BootstrapToRuntime>, BootstrapToRuntime) = server
+    .accept()
+    .map_err(|e| {
+      io::Error::other(format!("zygote bootstrap accept: {e}"))
+    })?;
+
+  //
+  Ok(ZygoteHandle {
+    process,
+    commandTx: bootstrap.commandTx,
+    replyRx: bootstrap.replyRx
+  })
 }
 
 /// Main zygote loop: an infinite command waiting loop.
 /// Which FFI will be needed is unknown in advance.
 ///
-/// The zygote is an empty runtime template; 
+/// The zygote is an empty runtime template;
 /// dlopen only works with the forked zygote.
-fn zygoteLoop(mut socket: UnixStream) -> !
+fn zygoteLoop(serverName: String) -> !
 {
   // Important: Ignoring SIGCHLD is needed only in the main Zygote.
   //
-  // This makes the OS kernel automatically clean up 
+  // This makes the OS kernel automatically clean up
   // its clones on termination (without zombies).
   //
-  // This must not be written in the main runtime: there, waitpid 
+  // This must not be written in the main runtime: there, waitpid
   // in supervisorLoop() tracks the Zygote process itself,
   // and with SIG_IGN it will fail with ECHILD and enter guaranteed CPU load.
   unsafe{ libc::signal(libc::SIGCHLD, libc::SIG_IGN); }
 
-  //
-  loop
-  {
-    // Get the socket path for the new clone
-    if readMessage(&mut socket).is_err() {
-      std::process::exit(0); // Parent died
-    }
-
-    // Create a paired socket in memory for the new clone
-    let (runtimeSocket, cloneSocket): (UnixStream, UnixStream) = match UnixStream::pair() {
-      Ok(pair) => pair,
-      Err(_) => {
-        let _ = writeMessage(&mut socket, &0i32.to_le_bytes());
-        continue;
-      }
+  // Control channels: Runtime holds commandTx + replyRx;
+  // Main Zygote holds commandRx + replyTx.
+  let (commandTx, commandRx): (IpcSender<ZygoteCommand>, IpcReceiver<ZygoteCommand>) = 
+    match ipc::channel::<ZygoteCommand>()
+    {
+      Ok(p) => p,
+      Err(_) => std::process::exit(1)
+    };
+  let (replyTx, replyRx): (IpcSender<ZygoteReply>, IpcReceiver<ZygoteReply>) = 
+    match ipc::channel::<ZygoteReply>()
+    {
+      Ok(p) => p,
+      Err(_) => std::process::exit(1)
     };
 
-    match unsafe{ libc::fork() }
+  // Connect to Runtime's one-shot server and hand over the ends Runtime needs.
+  let bootstrapTx: IpcSender<BootstrapToRuntime> = match IpcSender::connect(serverName)
+  {
+    Ok(tx) => tx,
+    Err(_) => std::process::exit(1)
+  };
+  if bootstrapTx
+    .send(BootstrapToRuntime {
+      commandTx,
+      replyRx
+    })
+    .is_err()
+  {
+    std::process::exit(1);
+  }
+  drop(bootstrapTx);
+
+  // Infinite event loop processing control commands from the main Runtime.
+  loop
+  {
+    // Blocks until a new command is received via the control channel.
+    let cmd: ZygoteCommand = match commandRx.recv()
     {
-      -1 => {
-        let _ = writeMessage(&mut socket, &0i32.to_le_bytes());
-      }
-      0 => {
-        // Zygote clone: close the parent side and enter the loop
-        drop(runtimeSocket);
-        cloneLoop(cloneSocket);
-      }
-      pid => {
-        // Main zygote: send the PID and forward the socket descriptor to the Runtime
-        drop(cloneSocket);
-        if socket.write_all(&pid.to_le_bytes()).is_ok() {
-          let _ = sendFd(&mut socket, runtimeSocket.as_raw_fd());
+      Ok(c) => c,
+      Err(_) => std::process::exit(0) // Runtime / control channel died
+    };
+
+    // Routes and executes the received control command.
+    match cmd
+    {
+      ZygoteCommand::SpawnClone =>
+      {
+        // IMPORTANT (macOS / Mach ports):
+        // Do NOT create data channels before fork(). Mach port rights are not
+        // safely inherited across fork — Runtime then gets "Bogus destination port"
+        // on the first send. Pattern used by ipc-channel itself:
+        //   1. Parent creates a one-shot server (bootstrap name only).
+        //   2. fork().
+        //   3. Child creates channels AFTER fork, connects to the one-shot,
+        //      sends Runtime-facing ends to the parent.
+        //   4. Parent accept()s them and forwards to Runtime via ZygoteReply.
+        let (cloneServer, cloneServerName): (
+          IpcOneShotServer<CloneBootstrap>,
+          String
+        ) = match IpcOneShotServer::new()
+        {
+          Ok(s) => s,
+          Err(_) =>
+          {
+            let _ = replyTx.send(ZygoteReply::SpawnFailed);
+            continue;
+          }
+        };
+
+        // Forks the main zygote to spawn a fresh, clean clone process.
+        match unsafe{ libc::fork() }
+        {
+          -1 =>
+          {
+            let _ = replyTx.send(ZygoteReply::SpawnFailed);
+          }
+          0 =>
+          {
+            // macOS / Mach ports + fork:
+            // After fork the child inherits ipc-channel ends (cloneServer, commandRx,
+            // replyTx) whose port names are often already invalid in the child task.
+            // Calling Drop on them panics inside ipc-channel (InvalidName /
+            // mach_port_deallocate). Parent still holds the live rights — child must
+            // NOT Drop any pre-fork ipc-channel object; only mem::forget.
+            std::mem::forget(cloneServer);
+            std::mem::forget(commandRx);
+            std::mem::forget(replyTx);
+            // Channels are born here — after fork — so Mach rights are fresh.
+            let (requestTx, requestRx): (IpcSender<FFIRequest>, IpcReceiver<FFIRequest>) = 
+              match ipc::channel::<FFIRequest>()
+              {
+                Ok(p) => p,
+                Err(_) => std::process::exit(1)
+              };
+            let (responseTx, responseRx): (IpcSender<FFIResponse>, IpcReceiver<FFIResponse>) = 
+              match ipc::channel::<FFIResponse>()
+              {
+                Ok(p) => p,
+                Err(_) => std::process::exit(1)
+              };
+            let bootstrapTx: IpcSender<CloneBootstrap> =
+              match IpcSender::connect(cloneServerName)
+              {
+                Ok(tx) => tx,
+                Err(_) => std::process::exit(1)
+              };
+            // Hand parent (→ Runtime) the ends that send requests / receive responses.
+            if bootstrapTx
+              .send(CloneBootstrap {
+                requestTx,
+                responseRx
+              })
+              .is_err()
+            {
+              std::process::exit(1);
+            }
+            drop(bootstrapTx);
+            cloneLoop(requestRx, responseTx);
+          }
+          pid =>
+          { // Parent: receive Runtime-facing ends from the child, forward to Runtime.
+            let (_rx, bootstrap): (IpcReceiver<CloneBootstrap>, CloneBootstrap) =
+              match cloneServer.accept()
+              {
+                Ok(v) => v,
+                Err(_) =>
+                {
+                  let _ = replyTx.send(ZygoteReply::SpawnFailed);
+                  continue;
+                }
+              };
+            let _ = replyTx.send(ZygoteReply::Clone {
+              pid,
+              requestTx: bootstrap.requestTx,
+              responseRx: bootstrap.responseRx
+            });
+            //
+          }
         }
+        //
       }
     }
     //
   }
 }
 
+// =================================================================================================
+
 /// Personal clone loop.
-fn cloneLoop(mut socket: UnixStream) -> !
+///
+/// Waits for [`FFIRequest`] from Runtime, runs the operation, sends [`FFIResponse`].
+fn cloneLoop(requestRx: IpcReceiver<FFIRequest>, responseTx: IpcSender<FFIResponse>) -> !
 {
   // Local cache for dynamically loaded libraries to avoid costly repeated dlopen calls.
   let mut libraryCache: FxHashMap<String, Library> = FxHashMap::default();
 
-  //
   loop
   {
-    // Wait for and read the incoming FFI request payload from the main runtime.
-    let requestBytes: Vec<u8> = match readMessage(&mut socket)
+    // Wait for and read the incoming FFI request from the main runtime.
+    let request: FFIRequest = match requestRx.recv()
     {
-      Ok(bytes) => bytes,
-      Err(_) =>
-      // The variable was dropped — the socket was closed, the clone exited.
-        std::process::exit(0)
+      Ok(r) => r,
+      // Channel dropped — Runtime closed the clone handle / process exiting.
+      Err(_) => std::process::exit(0)
     };
 
     // Execute the requested FFI operation using the cache and prepare the response.
-    let response: FFIResponse = handleRequest(&requestBytes, &mut libraryCache);
-    let encodedResponse: Vec<u8> = match encode(&response) {
-      Ok(bytes) => bytes,
-      Err(_) => std::process::exit(1),
-    };
+    let response: FFIResponse = handleRequest(request, &mut libraryCache);
 
-    // Transmit the serialized execution result or error back to the parent process via IPC.
-    if writeMessage(&mut socket, &encodedResponse).is_err() {
+    // Transmit the execution result or error back to the parent process via IPC.
+    if responseTx.send(response).is_err()
+    {
       std::process::exit(0);
     }
   }
@@ -369,19 +608,18 @@ fn cloneLoop(mut socket: UnixStream) -> !
 /// Handles an incoming request and performs an FFI operation using the library cache.
 ///
 /// Returns the execution result or an error description.
-fn handleRequest(requestBytes: &[u8], cache: &mut FxHashMap<String, Library>) -> FFIResponse
+fn handleRequest(
+  request: FFIRequest,
+  cache: &mut FxHashMap<String, Library>
+) -> FFIResponse
 {
-  match decode::<FFIRequest>(requestBytes)
+  match executeFFI(request, cache)
   {
-    Ok(request) => match executeFFI(request, cache)
-    {
-      // `takeLastErrno` reads whatever `invokeFFI` stashed right after `cif.call()`
-      // (or `None`, for requests that never call — Alloc, Free, ReadMemory, ...
-      // and for calls that didn't ask for it) — and clears it for the next request.
-      Ok(v) => FFIResponse::Ok(v, takeLastErrno()),
-      Err(e) => FFIResponse::Err(e),
-    },
-    Err(e) => FFIResponse::Err(e),
+    // `takeLastErrno` reads whatever `invokeFFI` stashed right after `cif.call()`
+    // (or `None`, for requests that never call — Alloc, Free, ReadMemory, ...
+    // and for calls that didn't ask for it) — and clears it for the next request.
+    Ok(v) => FFIResponse::Ok(v, takeLastErrno()),
+    Err(e) => FFIResponse::Err(e)
   }
 }
 
@@ -394,137 +632,38 @@ fn supervisorLoop() -> ()
 {
   loop
   {
+    // Retrieves the PID of the currently active main zygote for monitoring.
     let pidToWait: u32 = {
-      let mutex: &Mutex<ZygoteHandle> = match ZygoteState.get() { Some(m) => m, None => return };
+      let mutex: &Mutex<ZygoteHandle> = match ZygoteState.get()
+      {
+        Some(m) => m,
+        None => return
+      };
       mutex.lock().process.id()
     };
+
+    // Blocks the supervisor thread until the monitored main zygote process terminates.
     unsafe{ libc::waitpid(pidToWait as libc::pid_t, std::ptr::null_mut(), 0); }
 
+    // Acquires the global state lock to replace the terminated zygote with a new instance.
     let mutex: &Mutex<ZygoteHandle> = ZygoteState.get().unwrap();
     let mut guard: MutexGuard<ZygoteHandle> = mutex.lock();
     if guard.process.id() == pidToWait // Not recreated in parallel yet through call()
     {
       match spawnZygote()
       {
-        Ok(newHandle) => { *guard = newHandle; }
-        Err(_) => { drop(guard); thread::sleep(std::time::Duration::from_millis(200)); }
+        Ok(newHandle) =>
+        {
+          *guard = newHandle;
+        }
+        Err(_) =>
+        {
+          drop(guard);
+          thread::sleep(std::time::Duration::from_millis(200));
+        }
       }
     }
     //
-  }
-}
-
-// =================================================================================================
-
-/// Writes a message to the socket with the data size prepended.
-fn writeMessage(socket: &mut UnixStream, data: &[u8]) -> io::Result<()>
-{
-  socket.write_all(&(data.len() as u32).to_le_bytes())?;
-  socket.write_all(data)
-}
-
-/// Reads a message from the socket using the length specified in the header.
-fn readMessage(socket: &mut UnixStream) -> io::Result<Vec<u8>>
-{
-  let mut lengthBuffer: [u8; 4] = [0u8; 4];
-  socket.read_exact(&mut lengthBuffer)?;
-  let mut buffer: Vec<u8> = vec![0u8; u32::from_le_bytes(lengthBuffer) as usize];
-  socket.read_exact(&mut buffer)?;
-  Ok(buffer)
-}
-
-/// Serializes a value into a byte representation.
-pub fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, FFIError>
-{
-  let config: Configuration = bincode::config::standard();
-  bincode::serde::encode_to_vec(value, config)
-    .map_err(|e| FFIError::EncodeFailed(format!("Encode failed: {}", e)))
-}
-
-/// Deserializes a byte representation back into a value.
-pub fn decode<T: for<'a> Deserialize<'a>>(bytes: &[u8]) -> Result<T, FFIError>
-{
-  let config: Configuration = bincode::config::standard();
-  bincode::serde::decode_from_slice(bytes, config)
-    .map(|(decoded, _)| decoded)
-    .map_err(|e| FFIError::DecodeFailed(format!("Decode failed: {}", e)))
-}
-
-// =================================================================================================
-
-/// Sends the socket descriptor to 
-/// another process through an anonymous channel.
-fn sendFd(socket: &mut UnixStream, fd: RawFd) -> io::Result<()>
-{
-  // According to the POSIX standard, 
-  // at least 1 byte of actual data is required to send cmsg.
-  let mut msgHeader: libc::msghdr = unsafe { std::mem::zeroed() };
-  let mut dummyByte: [u8; 1] = [0u8; 1];
-
-  let mut ioVector: libc::iovec = libc::iovec {
-    iov_base: dummyByte.as_mut_ptr() as *mut _,
-    iov_len: 1,
-  };
-
-  // Allocate memory for the ancillary message 
-  // and pack the FD into the SCM_RIGHTS structure.
-  let cmsgSpace: u32 = unsafe { libc::CMSG_SPACE(std::mem::size_of::<RawFd>() as u32) };
-  let mut cmsgBuffer: Vec<u8> = vec![0u8; cmsgSpace as usize];
-
-  msgHeader.msg_iov = &mut ioVector;
-  msgHeader.msg_iovlen = 1;
-  msgHeader.msg_control = cmsgBuffer.as_mut_ptr() as *mut _;
-  msgHeader.msg_controllen = cmsgBuffer.len() as _;
-
-  unsafe {
-    let cmsg: *mut libc::cmsghdr = libc::CMSG_FIRSTHDR(&msgHeader);
-    (*cmsg).cmsg_level = libc::SOL_SOCKET;
-    (*cmsg).cmsg_type = libc::SCM_RIGHTS;
-    (*cmsg).cmsg_len = libc::CMSG_LEN(std::mem::size_of::<RawFd>() as u32) as _;
-
-    let fdPtr: *mut RawFd = libc::CMSG_DATA(cmsg) as *mut RawFd;
-    fdPtr.write_unaligned(fd);
-  }
-
-  // Send the control packet through the kernel system call
-  let result: libc::ssize_t = unsafe { libc::sendmsg(socket.as_raw_fd(), &msgHeader, 0) };
-  if result < 0 { Err(io::Error::last_os_error()) } else { Ok(()) }
-}
-
-/// Receives the socket descriptor directly 
-/// from the memory of another process.
-fn recvFd(socket: &mut UnixStream) -> io::Result<RawFd>
-{
-  // Prepare buffers to receive the dummy byte and the ancillary header
-  let mut msgHeader: libc::msghdr = unsafe { std::mem::zeroed() };
-  let mut dummyByte: [u8; 1] = [0u8; 1];
-
-  let mut ioVector: libc::iovec = libc::iovec {
-    iov_base: dummyByte.as_mut_ptr() as *mut _,
-    iov_len: 1,
-  };
-
-  let cmsgSpace: u32 = unsafe { libc::CMSG_SPACE(std::mem::size_of::<RawFd>() as u32) };
-  let mut cmsgBuffer: Vec<u8> = vec![0u8; cmsgSpace as usize];
-
-  msgHeader.msg_iov = &mut ioVector;
-  msgHeader.msg_iovlen = 1;
-  msgHeader.msg_control = cmsgBuffer.as_mut_ptr() as *mut _;
-  msgHeader.msg_controllen = cmsgBuffer.len() as _;
-
-  // Read the message from the socket
-  let result: libc::ssize_t = unsafe { libc::recvmsg(socket.as_raw_fd(), &mut msgHeader as *mut _, 0) };
-  if result <= 0 { return Err(io::Error::last_os_error()); }
-
-  // Check for access permissions and extract the received descriptor
-  unsafe {
-    let cmsg: *mut libc::cmsghdr = libc::CMSG_FIRSTHDR(&msgHeader);
-    if cmsg.is_null() || (*cmsg).cmsg_type != libc::SCM_RIGHTS {
-      return Err(io::Error::new(io::ErrorKind::InvalidData, "No FD received"));
-    }
-
-    let fdPtr: *const RawFd = libc::CMSG_DATA(cmsg) as *const RawFd;
-    Ok(fdPtr.read_unaligned())
   }
 }
 

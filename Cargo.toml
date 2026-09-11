@@ -97,6 +97,11 @@ bytemuck = { version = "1.25.2", features = ["derive"] }
 # Zero-cost casting of POD types. Used for static repr structures
 # (readStruct<T>) to safely reinterpret raw bytes as typed structs.
 
+ipc-channel = "0.23.0"
+# Provides IPC channels for communication between processes.
+# Messages are serialized/deserialized via serde and transferred
+# through operating system IPC primitives.
+
 # ======================================================================================================================
 
 [lints.rust]

@@ -11,9 +11,9 @@
 //!
 //! # Platform support
 //!
-//! Supported only on Unix-like OSes, and tested only on Linux.
+//! Supported only on Unix-like OSes.
 //!
-//! _(Planned: Windows, macOS, WASM, Bare metal.)_
+//! _(Planned: Windows, WASM, Bare metal.)_
 //!
 //! # Features
 //!

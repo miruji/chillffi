@@ -12,7 +12,6 @@ use std::ffi::c_void;
 use fxhash::FxHashMap;
 use parking_lot::lock_api::MutexGuard;
 use crate::zygote::{FFIRequest};
-
 // =================================================================================================
 
 /// Callback registry inside the clone (not parent).
@@ -421,8 +420,7 @@ fn invokeFFI(
       let val: u8 = unsafe { cif.call::<u8>(codePointer, argsFfi) };
       Value::Bool(val != 0)
     }
-    Type::Pointer =>
-    {
+    Type::Pointer => {
       let ptr: *mut c_void = unsafe{ cif.call::<*mut c_void>(codePointer, argsFfi) };
       Value::Pointer(ptr as usize)
     }
@@ -441,9 +439,9 @@ fn invokeFFI(
   // Immediately after cif.call() (see the doc comment above), before
   // anything else in the caller's chain — including panic checking in
   // invokeAtPointer — gets a chance to touch this clone's state.
-  if readErrno 
+  if readErrno
   {
-    let errno: i32 = unsafe 
+    let errno: i32 = unsafe
     {
       #[cfg(target_os = "linux")]
       {
@@ -456,7 +454,7 @@ fn invokeFFI(
       }
     };
 
-    LastErrno.with(|e| e.set(Some(errno)));
+    LastErrno.set(Some(errno));
   }
 
   Ok(result)
@@ -714,13 +712,28 @@ pub fn executeFFI(
       // Only RawString and CString payloads are accepted for memory writes.
       //
       // todo Is this a limitation? Or is this a normal state.
-      let bytes: &[u8] = match &value {
-        Value::RawString(v) | Value::CString(v) => v.as_slice(),
-        _ => return Err(FFIError::BadArgument("expected RawString or CString for WriteMemory".to_string())),
+      //
+      // Value::CString stores bytes WITHOUT the trailing NUL (see From<&CStr>/CString),
+      // but WriteMemory of a C string must place '\0' in the target buffer so that
+      // strlen / C APIs see a valid C string. RawString is copied verbatim.
+      let owned: Vec<u8> = match &value {
+        Value::RawString(v) => v.clone(),
+        Value::CString(v) => {
+          let mut b: Vec<u8> = v.clone();
+          b.push(0);
+          b
+        }
+        _ => {
+          return Err(FFIError::BadArgument(
+            "expected RawString or CString for WriteMemory".to_string(),
+          ))
+        }
       };
 
       // Copy the bytes into the target process memory.
-      unsafe{ std::ptr::copy_nonoverlapping(bytes.as_ptr(), pointer as *mut u8, bytes.len()) };
+      unsafe {
+        std::ptr::copy_nonoverlapping(owned.as_ptr(), pointer as *mut u8, owned.len());
+      }
       Ok(Value::None)
     }
 

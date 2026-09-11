@@ -6,7 +6,7 @@
 [![Documentation](https://docs.rs/chillffi/badge.svg)](https://docs.rs/chillffi)
 [![License: FCL](https://img.shields.io/badge/License-FCL-blue.svg)](LICENSE.md)
 
-`chillffi` allows dynamically loading C libraries `.so` 
+`chillffi` allows dynamically loading C libraries `.so`
 and calling their functions at runtime, **isolating the calls in a separate empty process**.
 
 If third-party C code crashes or corrupts something, your main Rust application will continue running.
@@ -30,9 +30,9 @@ Add the dependency to `Cargo.toml`:
 
 > [!NOTE]
 >
-> Supported only on Unix-like OSes, and tested only on Linux.
+> Supported only on Unix-like OSes.
 >
-> _(Planned: Windows, macOS, WASM, Bare metal.)_
+> _(Planned: Windows, WASM, Bare metal.)_
 
 ## 🚀 Quick Start
 
@@ -59,7 +59,7 @@ fn main() -> ()
 }
 ```
 
-For memory-sensitive operations — C strings, out-parameters, or raw buffers — 
+For memory-sensitive operations — C strings, out-parameters, or raw buffers —
 use the scoped variant with `Scope` and `AllocatedMemory`:
 ```rust
 fn main() -> ()
@@ -97,9 +97,9 @@ You can also run them via `cargo run --example <name>`.
 
 ## ⚡ Why is this convenient
 
-In general practice, we are used to doing it like in Python 
+In general practice, we are used to doing it like in Python
 and other programming languages - precisely specifying all the wrappers for FFI.
-After which we observe how FFI still crashes anyway 
+After which we observe how FFI still crashes anyway
 and the libraries are not built, and the code does not work.
 
 This is all because FFI requires a manual bridge and it is not always possible to make one.
@@ -108,10 +108,10 @@ This is all because FFI requires a manual bridge and it is not always possible t
 Because FFI should not be scattered throughout your code - this is an unsafe approach.
 Therefore, we write it in isolation and preferably briefly, only when necessary.
 
-Since everything is located in isolated processes - 
+Since everything is located in isolated processes -
 we do not damage the main runtime in any way and do not touch your code.
-All FFI requests work in a sterile manner and 
-in case of errors will clearly let you know about it. 
+All FFI requests work in a sterile manner and
+in case of errors will clearly let you know about it.
 You can also simply ignore them if you want.
 
 As a result, we can freely and simply write:
@@ -133,24 +133,24 @@ This is also different from the WASM approach - because we preserve a true nativ
 4. In case of errors, the supervisor intercepts the worker crash and returns the error to Rust, keeping your application stable.
 
 > [!IMPORTANT]
-> 
+>
 > This does not protect you from the FFI code running inside the isolated process.
-> 
+>
 > For example, if it does something with your OS or file system -
 > it is already your responsibility to separately protect against this.
-> 
+>
 > For example: You can use a virtual space for the file system and so on.
 
 > [!IMPORTANT]
-> 
+>
 > FFI blocks should be as small as possible in size. I.e., not 100 lines in 1 FFI space.
-> 
+>
 > An exception can be considered when you need a single address space for several operations.
-> 
+>
 > In other cases, you should separate FFI requests as much as possible.
-> 
+>
 > Because no one can guarantee that any FFI request will not break your code.
-> 
+>
 > Even if you are an experienced programmer, there are things that do not depend on your experience.
 
 <!-- ## 🧭 Roadmap (todo better about capabilities) -->
