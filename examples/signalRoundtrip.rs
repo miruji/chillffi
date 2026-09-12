@@ -16,7 +16,7 @@ fn main() -> ()
     let libc: Library = scope.load(LibcPath)?;
 
     // Register a Rust closure as SIGUSR1's handler.
-    let handler: Callback = callback!(scope, [] |signum: i32| -> () {
+    let handler: Callback = callback!(scope, |signum: i32| -> () {
       println!("[handler] called directly via callPointer!, signum = {signum}");
     });
 

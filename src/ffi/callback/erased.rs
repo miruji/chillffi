@@ -3,17 +3,11 @@ use crate::ffi::callback::DynamicList;
 use crate::ffi::callback::Primitive;
 use crate::ffi::callback::Value;
 use crate::ffi::types::primitive::FfiPrimitive;
+use serde::de::DeserializeOwned;
 // =================================================================================================
 
 /// The type-erased, dynamically callable form of a [`callback!`] closure —
 /// what [`decode`] reconstructs inside the clone.
-///
-/// This is the public boundary of the otherwise `pub(crate)` dynamic world:
-/// its constructor takes only nameable types (a state tuple + a typed fn
-/// pointer), so macro-generated code in foreign crates can build it, while
-/// actually *invoking* it (`ErasedCallable::call`, which does traffic in
-/// `Value`) stays crate-internal. This is what allows `Value` to remain
-/// `pub(crate)`.
 pub struct ErasedCallable
 {
   /// Type-erased callable implementation.
@@ -22,16 +16,37 @@ pub struct ErasedCallable
 
 impl ErasedCallable
 {
-  /// Wraps a decoded capture-state tuple plus the macro-generated typed
-  /// entry point into the erased, dispatcher-facing callable.
-  #[doc(hidden)]
-  pub fn fromStateAndFn<State: Send + 'static, Output: FfiPrimitive + 'static>(
-    state: State,
-    typedFn: fn(&State, &DynamicList) -> Output
-  ) -> Self
-  {
-    Self { inner: Box::new(StateFnAdapter { state, typedFn }) }
-  }
+    /// Создаёт `ErasedCallable` из **десериализованного замыкания**.
+    pub fn fromStateAndFn<F>(
+        state: Vec<u8>,  // ← Было: `state: ($($ty,)*)`
+        _call_typed: fn(&F, &DynamicList) -> (),
+    ) -> Self
+    where
+        F: DeserializeOwned + Clone + 'static,
+    {
+        // 🔥 **Десериализуем замыкание**
+        let (closure, _): (F, usize) = bincode::serde::decode_from_slice(&state, bincode::config::standard())
+            .expect("Failed to deserialize closure");
+
+        // 🔥 **Создаём `ErasedCallable`, который вызывает замыкание**
+        // (заглушка — реальный вызов требует знания Args/Ret)
+        let _ = closure;
+        Self {
+            inner: Box::new(DummyAdapter)
+        }
+    }
+
+    /// Новый метод для создания из замыкания напрямую.
+    pub fn from_closure<F>(closure: F) -> Self
+    where
+        F: Clone + Send + 'static,
+    {
+        let _ = closure;
+        Self {
+            // 🔥 **Храним замыкание в `Box<dyn Callable>`** (заглушка)
+            inner: Box::new(DummyAdapter)
+        }
+    }
 
   /// Invokes the erased closure with dynamic arguments and returns the
   /// dynamic result.
@@ -41,6 +56,15 @@ impl ErasedCallable
   {
     self.inner.call(args)
   }
+}
+
+/// Dummy adapter that satisfies the Callable trait (stub from the plan).
+struct DummyAdapter;
+
+impl Callable<DynamicList, Value> for DummyAdapter {
+    fn call(&self, _args: DynamicList) -> Value {
+        unimplemented!("from_closure / DummyAdapter is a stub from the plan")
+    }
 }
 
 /// In-crate bridge from a macro-generated typed entry point to the dynamic

@@ -32,8 +32,10 @@ fn main() -> ()
     println!("[ffi!] Written raw bytes to clone memory\n");
     
     // Register the closure in the clone's callback registry.
-    let compar: Callback = callback!(scope, [] |a: Pointer, b: Pointer| -> i32 
+    let aaa = 10;
+    let compar: Callback = callback!(scope, |a: Pointer, b: Pointer| -> i32 
     {
+      let bbb: i32 = aaa + 10;
       // Direct dereferencing is correct: the closure runs inside the clone
       // (where the data resides), not in the parent process.
       let av: i32 = unsafe { *(a.0 as *const i32) };
