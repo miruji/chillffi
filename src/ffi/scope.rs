@@ -5,10 +5,12 @@ use crate::ffi::errors::FFIError;
 use crate::ffi::library::{nextLibraryId, registerLibrary, sendRawRequest, Library};
 use crate::ffi::types::primitive::Callback;
 use crate::ffi::types::primitive::DynamicList;
+use crate::ffi::types::primitive::Primitive;
 use crate::ffi::types::primitive::{Arg, FfiArg, FfiPrimitive};
 use crate::ffi::types::{Type, Value};
 use crate::pathResolver::{resolveGlobal, PathResolver};
 use crate::zygote::{ClonedZygote, FFIRequest, ZygoteGuard};
+use serde::Serialize;
 use std::cell::RefCell;
 use std::cell::UnsafeCell;
 use std::path::PathBuf;
@@ -363,10 +365,11 @@ impl<'g> Scope<'g>
   // ===============================================================================================
 
   /// Registers a closure built with [`callback!`] as an FFI-callable function
-  /// (e.g. a `qsort` comparator). New design: automatic capture via serialized closure.
+  /// (e.g. a `qsort` comparator). Capture is explicit at the macro call site,
+  /// this method only ships the already-built closure to the clone:
   pub fn callback(
     &self,
-    f: Sendable
+    f: crate::ffi::callback::sendable::Sendable
   ) -> Callback
   {
     static nextID: AtomicU64 = AtomicU64::new(1);

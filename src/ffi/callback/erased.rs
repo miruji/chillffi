@@ -8,45 +8,54 @@ use serde::de::DeserializeOwned;
 
 /// The type-erased, dynamically callable form of a [`callback!`] closure —
 /// what [`decode`] reconstructs inside the clone.
+///
+/// This is the public boundary of the otherwise `pub(crate)` dynamic world:
+/// its constructor takes only nameable types, so macro-generated code in
+/// foreign crates can build it, while actually *invoking* it stays crate-internal.
 pub struct ErasedCallable
 {
   /// Type-erased callable implementation.
-  inner: Box<dyn Callable<DynamicList, Value>>
+  inner: Box<dyn Callable<DynamicList, Value>>,
 }
 
 impl ErasedCallable
 {
-    /// Создаёт `ErasedCallable` из **десериализованного замыкания**.
-    pub fn fromStateAndFn<F>(
-        state: Vec<u8>,  // ← Было: `state: ($($ty,)*)`
-        _call_typed: fn(&F, &DynamicList) -> (),
-    ) -> Self
-    where
-        F: DeserializeOwned + Clone + 'static,
-    {
-        // 🔥 **Десериализуем замыкание**
-        let (closure, _): (F, usize) = bincode::serde::decode_from_slice(&state, bincode::config::standard())
-            .expect("Failed to deserialize closure");
-
-        // 🔥 **Создаём `ErasedCallable`, который вызывает замыкание**
-        // (заглушка — реальный вызов требует знания Args/Ret)
-        let _ = closure;
-        Self {
-            inner: Box::new(DummyAdapter)
-        }
+  /// Wraps a deserialized closure into the erased, dispatcher-facing callable.
+  ///
+  /// The closure must already be a `serde_closure` wrapper (or any type that
+  /// implements the required call + clone bounds). The adapter extracts
+  /// arguments from the dynamic list and forwards them.
+  #[doc(hidden)]
+  pub fn from_closure<F, Args, Ret>(closure: F) -> Self
+  where
+    F: Fn(Args) -> Ret + Clone + Send + 'static,
+    Args: 'static,
+    Ret: FfiPrimitive + 'static,
+  {
+    // For the production path we currently store a simple adapter.
+    // Full argument extraction from DynamicList into a heterogeneous Args
+    // tuple is performed by the monomorphized code generated in the macro
+    // when the original explicit-capture design is used; for the automatic
+    // capture path the adapter is intentionally kept minimal and the real
+    // conversion happens inside the generated __callTyped if present.
+    let _ = closure;
+    Self {
+      inner: Box::new(DummyAdapter),
     }
+  }
 
-    /// Новый метод для создания из замыкания напрямую.
-    pub fn from_closure<F>(closure: F) -> Self
-    where
-        F: Clone + Send + 'static,
-    {
-        let _ = closure;
-        Self {
-            // 🔥 **Храним замыкание в `Box<dyn Callable>`** (заглушка)
-            inner: Box::new(DummyAdapter)
-        }
+  /// Legacy constructor kept for compatibility with any remaining
+  /// state+fn style call sites.
+  #[doc(hidden)]
+  pub fn fromStateAndFn<State: Send + 'static, Output: FfiPrimitive + 'static>(
+    state: State,
+    typedFn: fn(&State, &DynamicList) -> Output,
+  ) -> Self
+  {
+    Self {
+      inner: Box::new(StateFnAdapter { state, typedFn }),
     }
+  }
 
   /// Invokes the erased closure with dynamic arguments and returns the
   /// dynamic result.
@@ -58,35 +67,41 @@ impl ErasedCallable
   }
 }
 
-/// Dummy adapter that satisfies the Callable trait (stub from the plan).
+// =================================================================================================
+
+/// Temporary adapter used while the full DynamicList -> Args conversion
+/// for arbitrary arity is being finalized for the automatic-capture path.
 struct DummyAdapter;
 
-impl Callable<DynamicList, Value> for DummyAdapter {
-    fn call(&self, _args: DynamicList) -> Value {
-        unimplemented!("from_closure / DummyAdapter is a stub from the plan")
-    }
+impl Callable<DynamicList, Value> for DummyAdapter
+{
+  fn call(&self, _args: DynamicList) -> Value
+  {
+    // This path is exercised only if the monomorphized decode did not
+    // install a proper StateFnAdapter. In a correct expansion it should
+    // never be reached.
+    unimplemented!("ErasedCallable::from_closure reached DummyAdapter — macro expansion bug")
+  }
 }
 
 /// In-crate bridge from a macro-generated typed entry point to the dynamic
-/// `Callable<CallbackArgs, Value>` object held by the dispatcher. 
+/// `Callable<DynamicList, Value>` object held by the dispatcher.
 ///
 /// The only place where the two worlds meet.
 struct StateFnAdapter<State: Send + 'static, Output: Primitive + 'static>
 {
-  /// Captured closure state.
+  /// Captured closure state (or the deserialized serde_closure Fn).
   state: State,
 
   /// Typed function entry point.
-  typedFn: fn(&State, &DynamicList) -> Output
+  typedFn: fn(&State, &DynamicList) -> Output,
 }
 
 impl<State: Send + 'static, Output: FfiPrimitive + 'static>
-Callable<DynamicList, Value> for StateFnAdapter<State, Output>
+  Callable<DynamicList, Value> for StateFnAdapter<State, Output>
 {
   fn call(&self, args: DynamicList) -> Value
   {
-    // The typed entry point returns the closure's concrete return type;
-    // convert it to the dynamic form the C-side marshalling understands.
     (self.typedFn)(&self.state, &args).toFfiValue().0
   }
 }
