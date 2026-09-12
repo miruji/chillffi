@@ -71,7 +71,7 @@ pub(crate) enum Value
   Function(u64),
 
   /// An ordered list of fields (not named).
-  Struct(Vec<Self>)
+  Struct(Box<[Self]>)
 }
 
 // =================================================================================================
@@ -114,7 +114,7 @@ pub enum Type
   Pointer,
 
   /// An ordered list of fields (not named).
-  Struct(Vec<Self>)
+  Struct(Box<[Self]>)
 }
 
 // =================================================================================================

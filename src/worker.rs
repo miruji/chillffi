@@ -117,7 +117,9 @@ extern "C" fn trampoline(
   // On panic, we signal the thread-local flag and return a dummy `None` value 
   // so C code can gracefully resume (and eventually return control to our safe wrapper).
   let result: Value =
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| userdata.closure.call(rustArgs.into())))
+    std::panic::catch_unwind(
+      std::panic::AssertUnwindSafe(|| userdata.closure.call(rustArgs.into_boxed_slice().into()))
+    )
       .unwrap_or_else(|_| {
         CallbackPanicked.set(true);
         Value::None
@@ -558,7 +560,7 @@ fn readStructAt(base: usize, fields: &[Type]) -> Result<Value, FFIError>
       _ => readArg((base + offset) as *const c_void, field),
     });
   }
-  Ok(Value::Struct(values))
+  Ok(Value::Struct(values.into_boxed_slice()))
 }
 
 /// Writes a single scalar `Value` into raw process memory at `ptr`,
@@ -670,7 +672,7 @@ pub fn executeFFI(
       // Bundles pointer + resolved size into one response — the caller
       // needs both (`AllocatedMemory` tracks its own length) and doesn't
       // have libffi's struct layout math available to recompute size itself.
-      Ok(Value::Struct(vec![Value::Pointer(ptr as usize), Value::Usize(size)]))
+      Ok(Value::Struct( Box::new([Value::Pointer(ptr as usize), Value::Usize(size)]) ))
     }
 
     FFIRequest::AllocAligned { length, alignment } => {

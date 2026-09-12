@@ -44,7 +44,7 @@ fn clockGettimeTyped() -> Result<Timespec, FFIError>
 {
   ffi!(|scope| {
     let libc: Library = scope.load(LibcPath)?;
-    let mem: AllocatedMemory = scope.alloc(std::mem::size_of::<Timespec>())?;
+    let mem: AllocatedMemory = scope.alloc(size_of::<Timespec>())?;
 
     libc.call("clock_gettime")
       .arg::<i32>(0) // CLOCK_REALTIME

@@ -20,9 +20,6 @@ use chillffi::ffi::types::Type;
 /// can be handled without special struct-return support.
 fn main() -> ()
 {
-  // struct Data { int size; int *values; }
-  let dataShape: Vec<Type> = vec![Type::I32, Type::Pointer];
-
   let values: Vec<i32> = ffi!(|scope| {
     scope.addSearchPath("examples/dynamicStructResult");
     let lib: Library = scope.load("libdata.so")?;
@@ -30,8 +27,9 @@ fn main() -> ()
     // struct Data *process();
     let dataPtr: Pointer = lib.call("process").result()?;
 
-    // Dereference the returned pointer using the known struct layout.
-    let fields: DynamicList = Scope::readDynamicStruct(dataPtr, &dataShape)?;
+    // Dereference the returned pointer using the known struct layout;
+    // struct Data { int size; int *values; }
+    let fields: DynamicList = Scope::readDynamicStruct(dataPtr, &vec![Type::I32, Type::Pointer])?;
     let size: i32 = fields.get(0)?;
     let valuesPtr: Pointer = fields.get(1)?;
 

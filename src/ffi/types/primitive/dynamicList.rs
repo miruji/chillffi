@@ -7,7 +7,7 @@ use crate::ffi::types::Value;
 pub struct DynamicList
 {
   /// FFI Values.
-  values: Vec<Value>
+  values: Box<[Value]>
 }
 
 impl DynamicList
@@ -15,7 +15,7 @@ impl DynamicList
   /// Creates a wrapper from a vector of values.
   ///
   /// (due to [`Value`] being used only within the crate)
-  pub(crate) const fn fromValues(values: Vec<Value>) -> Self
+  pub(crate) const fn fromValues(values: Box<[Value]>) -> Self
   {
     Self { values }
   }
@@ -44,10 +44,10 @@ impl DynamicList
 
 // =================================================================================================
 
-impl From<Vec<Value>> for DynamicList
+impl From<Box<[Value]>> for DynamicList
 {
   /// Converts a vector of [`Value`]s into a [`DynamicList`].
-  fn from(values: Vec<Value>) -> Self
+  fn from(values: Box<[Value]>) -> Self
   {
     Self { values }
   }

@@ -11,9 +11,6 @@ use chillffi::ffi::types::Type;
 /// Call clock_gettime and extract fields using dynamic struct layouts.
 fn main() -> ()
 {
-  // Define dynamic struct shape for timespec (time_t tv_sec; long tv_nsec;)
-  let timespecShape: Vec<Type> = vec![Type::I64, Type::I64];
-
   let (secs, nanos): (i64, i64) = ffi!(|scope| {
     let libc: Library = scope.load(LibcPath)?;
     
@@ -26,16 +23,18 @@ fn main() -> ()
       .arg(mem.asPointer())
       .void()?;
 
-    // Read dynamically shaped struct from memory using libffi ABI rules
-    let fields: DynamicList = Scope::readDynamicStruct(mem.address(), &timespecShape)?;
+    // Read dynamically shaped struct from memory using libffi ABI rules;
+    // Define dynamic struct shape for timespec (time_t tv_sec; long tv_nsec).
+    let fields: DynamicList = Scope::readDynamicStruct(mem.address(), &vec![Type::I64, Type::I64])?;
 
     // Parse extracted fields
     Ok((fields.get(0)?, fields.get(1)?))
   }).expect("readDynamicStruct failed");
 
   // Define a nested dynamic struct shape
+  // todo Тут что-то не так. Он че сам себя проверяет? А зачем код выше тогда был.
   let nestedShape: Vec<Type> = vec![
-    Type::Struct(vec![Type::U64, Type::U8, Type::F64]),
+    Type::Struct(Box::new([Type::U64, Type::U8, Type::F64])),
     Type::I8,
     Type::I64,
   ];
