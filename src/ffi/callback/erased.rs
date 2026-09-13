@@ -9,11 +9,8 @@ use crate::ffi::types::primitive::FfiPrimitive;
 /// what [`decode`] reconstructs inside the clone.
 ///
 /// This is the public boundary of the otherwise `pub(crate)` dynamic world:
-/// its constructor takes only nameable types (a state tuple + a typed fn
-/// pointer), so macro-generated code in foreign crates can build it, while
-/// actually *invoking* it (`ErasedCallable::call`, which does traffic in
-/// `Value`) stays crate-internal. This is what allows `Value` to remain
-/// `pub(crate)`.
+/// its constructor takes only nameable types, so macro-generated code in
+/// foreign crates can build it, while actually *invoking* it stays crate-internal.
 pub struct ErasedCallable
 {
   /// Type-erased callable implementation.
@@ -22,15 +19,22 @@ pub struct ErasedCallable
 
 impl ErasedCallable
 {
-  /// Wraps a decoded capture-state tuple plus the macro-generated typed
-  /// entry point into the erased, dispatcher-facing callable.
+  /// Wraps a reconstructed closure (or any state + typed entry point pair)
+  /// into the erased, dispatcher-facing callable.
+  ///
+  /// This is the only constructor `ErasedCallable` needs: a bit-copied
+  /// native closure is just "some `State` plus a way to call it", exactly
+  /// like any other `State` the macro could hand in, so there is no
+  /// separate closure-specific path to maintain.
   #[doc(hidden)]
   pub fn fromStateAndFn<State: Send + 'static, Output: FfiPrimitive + 'static>(
     state: State,
     typedFn: fn(&State, &DynamicList) -> Output
   ) -> Self
   {
-    Self { inner: Box::new(StateFnAdapter { state, typedFn }) }
+    Self {
+      inner: Box::new(StateFnAdapter { state, typedFn })
+    }
   }
 
   /// Invokes the erased closure with dynamic arguments and returns the
@@ -43,13 +47,15 @@ impl ErasedCallable
   }
 }
 
+// =================================================================================================
+
 /// In-crate bridge from a macro-generated typed entry point to the dynamic
-/// `Callable<CallbackArgs, Value>` object held by the dispatcher. 
+/// `Callable<DynamicList, Value>` object held by the dispatcher.
 ///
 /// The only place where the two worlds meet.
 struct StateFnAdapter<State: Send + 'static, Output: Primitive + 'static>
 {
-  /// Captured closure state.
+  /// Captured closure state (reconstructed by bit-copy — see `callback!`).
   state: State,
 
   /// Typed function entry point.
@@ -61,8 +67,6 @@ Callable<DynamicList, Value> for StateFnAdapter<State, Output>
 {
   fn call(&self, args: DynamicList) -> Value
   {
-    // The typed entry point returns the closure's concrete return type;
-    // convert it to the dynamic form the C-side marshalling understands.
     (self.typedFn)(&self.state, &args).toFfiValue().0
   }
 }
