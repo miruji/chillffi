@@ -8,7 +8,7 @@ use crate::ffi::callback::Envelope;
 use crate::ffi::callback::ErasedCallable;
 use crate::ffi::types::primitive::{Callback, Pointer};
 use crate::platform::LibcPath;
-// ===============================================================================================
+// =================================================================================================
 
 /// Baseline: a closure with *no* captures at all round-trips through a
 /// real registration, over real IPC, into a real clone, and back — the
@@ -22,12 +22,12 @@ fn roundtrip() -> ()
     let mem: AllocatedMemory = scope.alloc(4 * 4)?;
 
     let data: [i32; 4] = [3, 1, 4, 1];
-    let raw: &[u8] = unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, 16) };
+    let raw: &[u8] = unsafe{ std::slice::from_raw_parts(data.as_ptr() as *const u8, 16) };
     mem.write(raw)?;
 
     let compar: Callback = callback!(scope, |a: Pointer, b: Pointer| -> i32 {
-      let av: i32 = unsafe { *(a.0 as *const i32) };
-      let bv: i32 = unsafe { *(b.0 as *const i32) };
+      let av: i32 = unsafe{ *(a.0 as *const i32) };
+      let bv: i32 = unsafe{ *(b.0 as *const i32) };
       av.cmp(&bv) as i32
     });
 
@@ -63,13 +63,13 @@ fn externalCaptureReachesTheClone() -> ()
     let mem: AllocatedMemory = scope.alloc(4 * 4)?;
 
     let data: [i32; 4] = [5, 1, 9, 2];
-    let raw: &[u8] = unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, 16) };
+    let raw: &[u8] = unsafe{ std::slice::from_raw_parts(data.as_ptr() as *const u8, 16) };
     mem.write(raw)?;
 
     // `threshold` isn't listed anywhere — just used directly below.
     let compar: Callback = callback!(scope, |a: Pointer, b: Pointer| -> i32 {
-      let av: i32 = unsafe { *(a.0 as *const i32) } - threshold;
-      let bv: i32 = unsafe { *(b.0 as *const i32) } - threshold;
+      let av: i32 = unsafe{ *(a.0 as *const i32) } - threshold;
+      let bv: i32 = unsafe{ *(b.0 as *const i32) } - threshold;
       av.cmp(&bv) as i32
     });
 
@@ -89,7 +89,7 @@ fn externalCaptureReachesTheClone() -> ()
   assert_eq!(sorted, vec![1, 2, 5, 9]);
 }
 
-// ===============================================================================================
+// =================================================================================================
 
 /// Requesting the wrong Args/Output must fail cleanly — checked by the
 /// target function itself before any state is decoded.
@@ -153,4 +153,4 @@ fn siteTagMismatchIsCaught() -> ()
   }).expect("ffi! failed");
 }
 
-// ===============================================================================================
+// =================================================================================================
