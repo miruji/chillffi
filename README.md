@@ -17,22 +17,45 @@ _(In the future, an expansion of the functionality for working with FFI is plann
 
 ## ✨ Features
 
-- 🛡️ **Crash Isolation**: A crash or panic inside unreliable FFI code does not break or corrupt the main process.
-- ⚡ **Zygote Model (Zygote)**: Fast forking and spawning of isolated workers with minimal overhead.
-- 🚀 **In-memory IPC**: Transfer of file descriptors and data through sockets without accessing the disk.
-- 🧩 **Dynamic FFI**: On-the-fly function calls without the need to compile static C bindings.
+| Feature                | Status                                                                       |
+|------------------------|------------------------------------------------------------------------------|
+| Crash isolation        | ✅ Отдельный процесс для FFI, что не ломает ваш Runtime.                      |
+| Нативный запуск FFI    | ✅ Не VM, не большая по размеру и не требует больших зависимостей.            |
+| Скорость запуска       | ✅ Zygote-модель не сохраняет мусор и быстрый `fork` на каждый FFI.           |
+| IPC                    | ✅ `ipc-channel` дает сериализацию и реализован под разные платформы.         |
+| Многопоток и async     | ✅ Не ломается при многопотоке и async                                        |
+| Scope                  | ✅ Scope для зон запуска FFI (`ffi!`); Чтобы они были короткие и не выходили. |
+| Retained Scope         | ✅ Временное удержание FFI scope для динамических систем.                     |
+| Динамическая загрузка  | ✅ `libffi` простая, стабильная, под разные платформы, малый размер.          |
+| Path resolver          | ✅ Глобальный, scope-уровневый и прямой резолвер путей для библиотек.         |
+| Статический FFI        | ✅ Через Rust код .                                                           |
+| Динамический FFI       | ✅ On-the-fly function calls without the need to compile static C bindings.   |
+| Статические структуры  | ✅ `repr` структуры.                                                          |
+| Динамические структуры | ✅ Чтение и запись структур с произвольной раскладкой.                        |
+| Структуры по указателю | ✅ Поддержка передачи структур через указатели.                               |
+| Структуры по значению  | ⏳ Поддержка передачи структур по значению.                                   |
+| Работа с аллокацией    | ✅ Выделение участка памяти для FFI.                                          |
+| Callbacks              | ✅ Передача замыканий как C функций (`callback!`).                            |
+| Сигналы                | ✅ Работа с сигналами и вызов указателей (`callvPointer`, `callPointer`).     |
+| Errno Policy           | ✅ Настройка чтения errno на уровне вызова, scope или глобально.              |
+| Строковые типы данных  | String (""), CString (c""), RawString (b"")                                  |
+| Sandbox (защита FS)    | ⏳ #45                                                                        |
+| Библиотеки из байтов   | ⏳ #42                                                                        |
 
 ---
 
 ## 📦 Installation
 
-Add the dependency to `Cargo.toml`:
+Add the dependency to `Cargo.toml`. Отдельных флагов настройки нет.
 
-> [!NOTE]
->
-> Supported only on Unix-like OSes.
->
-> _(Planned: Windows, WASM, Bare metal.)_
+| Платформы           | Status |
+|---------------------|--------|
+| Linux               | ✅      |
+| macOS               | ✅      |
+| Windows             | ⏳      |
+| WASM                | ⏳ #43  |
+| Bare metal          | ⏳ #44  |
+| Сборка как `cdylib` | ❌      |
 
 ## 🚀 Quick Start
 
@@ -152,8 +175,6 @@ This is also different from the WASM approach - because we preserve a true nativ
 > Because no one can guarantee that any FFI request will not break your code.
 >
 > Even if you are an experienced programmer, there are things that do not depend on your experience.
-
-<!-- ## 🧭 Roadmap (todo better about capabilities) -->
 
 ## 📄 License
 
