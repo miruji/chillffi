@@ -8,7 +8,6 @@
 
 `chillffi` allows dynamically loading **C ABI-compatible libraries** 
 and calling their functions at runtime, **isolating each FFI call in a separate process**.
-
 If third-party native code crashes or corrupts memory, 
 the failure is contained within the isolated process, 
 keeping your main Rust application running.
@@ -59,8 +58,8 @@ Add the dependency to `Cargo.toml`. Отдельных флагов настро
 
 ## 🚀 Quick Start
 
-Example of a safe call to the `sqrt` function from the system library `libm.so.6` using the `ffi!{}` macro and explicit typing:
-
+Example of a safe call to the `sqrt` function from the system library `libm.so.6` 
+using the `ffi!{}` macro and explicit typing:
 ```rust
 fn main() -> ()
 {
@@ -82,8 +81,8 @@ fn main() -> ()
 }
 ```
 
-For memory-sensitive operations — C strings, out-parameters, or raw buffers —
-use the scoped variant with `Scope` and `AllocatedMemory`:
+Example of a memory-sensitive call to the `clock_gettime` function 
+from the system library `libc.so.6` using `AllocatedMemory`:
 ```rust
 fn main() -> ()
 {
