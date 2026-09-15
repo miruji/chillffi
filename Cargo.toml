@@ -72,8 +72,8 @@ incremental = true
 
 [dependencies]
 bincode = { version = "2.0.1", features = ["serde"] }
-# Used for FFI; (3.0 if anything - no).
-# todo Описать зачем именно он нужен. Сейчас расплывчато.
+# Provides binary serialization format for serde, used for efficient encoding
+# and decoding of IPC messages between isolated processes.
 
 libloading = { version = "0.9.0" }
 # Used for dynamic library loading (libraryPath)

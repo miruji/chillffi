@@ -16,45 +16,45 @@ keeping your main Rust application running.
 
 ## ✨ Features
 
-| Feature                | Status                                                                       |
-|------------------------|------------------------------------------------------------------------------|
-| Crash isolation        | ✅ Отдельный процесс для FFI, что не ломает ваш Runtime.                      |
-| Нативный запуск FFI    | ✅ Не VM, не большая по размеру и не требует больших зависимостей.            |
-| Скорость запуска       | ✅ Zygote-модель не сохраняет мусор и быстрый `fork` на каждый FFI.           |
-| IPC                    | ✅ `ipc-channel` дает сериализацию и реализован под разные платформы.         |
-| Многопоток и async     | ✅ Не ломается при многопотоке и async                                        |
-| Scope                  | ✅ Scope для зон запуска FFI (`ffi!`); Чтобы они были короткие и не выходили. |
-| Retained Scope         | ✅ Временное удержание FFI scope для динамических систем.                     |
-| Динамическая загрузка  | ✅ `libffi` простая, стабильная, под разные платформы, малый размер.          |
-| Path resolver          | ✅ Глобальный, scope-уровневый и прямой резолвер путей для библиотек.         |
-| Статический FFI        | ✅ Через Rust код .                                                           |
-| Динамический FFI       | ✅ On-the-fly function calls without the need to compile static C bindings.   |
-| Статические структуры  | ✅ `repr` структуры.                                                          |
-| Динамические структуры | ✅ Чтение и запись структур с произвольной раскладкой.                        |
-| Структуры по указателю | ✅ Поддержка передачи структур через указатели.                               |
-| Структуры по значению  | ⏳ Поддержка передачи структур по значению.                                   |
-| Работа с аллокацией    | ✅ Выделение участка памяти для FFI.                                          |
-| Callbacks              | ✅ Передача замыканий как C функций (`callback!`).                            |
-| Сигналы                | ✅ Работа с сигналами и вызов указателей (`callvPointer`, `callPointer`).     |
-| Errno Policy           | ✅ Настройка чтения errno на уровне вызова, scope или глобально.              |
-| Строковые типы данных  | String (`""`), CString (`c""`), RawString (`b""`).                           |
-| Sandbox (защита FS)    | ⏳ [#45](https://github.com/miruji/chillffi/issues/45)                        |
-| Библиотеки из байтов   | ⏳ [#42](https://github.com/miruji/chillffi/issues/42)                        |
+| Feature                  | Status                                                                              |
+|--------------------------|-------------------------------------------------------------------------------------|
+| Crash isolation          | ✅ A separate process for FFI that does not break your Runtime.                      |
+| Native FFI execution     | ✅ Not a VM, not large in size, and does not require large dependencies.             |
+| Startup speed            | ✅ The Zygote model does not retain garbage and uses a fast `fork` for each FFI.     |
+| IPC                      | ✅ `ipc-channel` provides serialization and is implemented for different platforms.  |
+| Multithreading and async | ✅ Does not break with multithreading and async                                      |
+| Scope                    | ✅ Scope for FFI execution areas (`ffi!`); so that they are short and do not escape. |
+| Retained Scope           | ✅ Temporary retention of the FFI scope for dynamic systems.                         |
+| Dynamic loading          | ✅ `libffi` is simple, stable, cross-platform, and small in size.                    |
+| Path resolver            | ✅ Global, scope-level, and direct path resolver for libraries.                      |
+| Static FFI               | ✅ Through Rust code.                                                                |
+| Dynamic FFI              | ✅ On-the-fly function calls without the need to compile static C bindings.          |
+| Static structures        | ✅ `repr` structures.                                                                |
+| Dynamic structures       | ✅ Reading and writing structures with arbitrary layouts.                            |
+| Pointer-based structures | ✅ Support for passing structures through pointers.                                  |
+| By-value structures      | ⏳ Support for passing structures by value.                                          |
+| Allocation handling      | ✅ Allocation of a memory region for FFI.                                            |
+| Callbacks                | ✅ Passing closures as C functions (`callback!`).                                    |
+| Signals                  | ✅ Working with signals and calling pointers (`callvPointer`, `callPointer`).        |
+| Errno Policy             | ✅ Configuring errno reading at the call, scope, or global level.                    |
+| String data types        | String (`""`), CString (`c""`), RawString (`b""`).                                  |
+| Sandbox (FS protection)  | ⏳ [#45](https://github.com/miruji/chillffi/issues/45)                               |
+| Libraries from bytes     | ⏳ [#42](https://github.com/miruji/chillffi/issues/42)                               |
 
 ---
 
 ## 📦 Installation
 
-Add the dependency to `Cargo.toml`. Отдельных флагов настройки нет.
+Add the dependency to `Cargo.toml`. There are no separate configuration flags.
 
-| Платформы           | Status                                                |
-|---------------------|-------------------------------------------------------|
-| Linux               | ✅                                                     |
-| macOS               | ✅                                                     |
-| Windows             | ⏳                                                     |
-| WASM                | ⏳ [#43](https://github.com/miruji/chillffi/issues/43) |
-| Bare metal          | ⏳ [#44](https://github.com/miruji/chillffi/issues/44) |
-| Сборка как `cdylib` | ❌                                                     |
+| Platforms            | Status                                                |
+|----------------------|-------------------------------------------------------|
+| Linux                | ✅                                                     |
+| macOS                | ✅                                                     |
+| Windows              | ⏳                                                     |
+| WASM                 | ⏳ [#43](https://github.com/miruji/chillffi/issues/43) |
+| Bare metal           | ⏳ [#44](https://github.com/miruji/chillffi/issues/44) |
+| Build as `cdylib`    | ❌                                                     |
 
 ## 🚀 Quick Start
 
