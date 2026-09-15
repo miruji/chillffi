@@ -6,12 +6,12 @@
 [![Documentation](https://docs.rs/chillffi/badge.svg)](https://docs.rs/chillffi)
 [![License: FCL](https://img.shields.io/badge/License-FCL-blue.svg)](LICENSE.md)
 
-`chillffi` allows dynamically loading C libraries `.so`
-and calling their functions at runtime, **isolating the calls in a separate empty process**.
+`chillffi` allows dynamically loading **C ABI-compatible libraries** 
+and calling their functions at runtime, **isolating each FFI call in a separate process**.
 
-If third-party C code crashes or corrupts something, your main Rust application will continue running.
-
-_(In the future, an expansion of the functionality for working with FFI is planned.)_
+If third-party native code crashes or corrupts memory, 
+the failure is contained within the isolated process, 
+keeping your main Rust application running.
 
 ---
 
@@ -38,9 +38,9 @@ _(In the future, an expansion of the functionality for working with FFI is plann
 | Callbacks              | ✅ Передача замыканий как C функций (`callback!`).                            |
 | Сигналы                | ✅ Работа с сигналами и вызов указателей (`callvPointer`, `callPointer`).     |
 | Errno Policy           | ✅ Настройка чтения errno на уровне вызова, scope или глобально.              |
-| Строковые типы данных  | String (""), CString (c""), RawString (b"")                                  |
-| Sandbox (защита FS)    | ⏳ #45                                                                        |
-| Библиотеки из байтов   | ⏳ #42                                                                        |
+| Строковые типы данных  | String (`""`), CString (`c""`), RawString (`b""`).                           |
+| Sandbox (защита FS)    | ⏳ [#45](https://github.com/miruji/chillffi/issues/45)                        |
+| Библиотеки из байтов   | ⏳ [#42](https://github.com/miruji/chillffi/issues/42)                        |
 
 ---
 
@@ -48,14 +48,14 @@ _(In the future, an expansion of the functionality for working with FFI is plann
 
 Add the dependency to `Cargo.toml`. Отдельных флагов настройки нет.
 
-| Платформы           | Status |
-|---------------------|--------|
-| Linux               | ✅      |
-| macOS               | ✅      |
-| Windows             | ⏳      |
-| WASM                | ⏳ #43  |
-| Bare metal          | ⏳ #44  |
-| Сборка как `cdylib` | ❌      |
+| Платформы           | Status                                                |
+|---------------------|-------------------------------------------------------|
+| Linux               | ✅                                                     |
+| macOS               | ✅                                                     |
+| Windows             | ⏳                                                     |
+| WASM                | ⏳ [#43](https://github.com/miruji/chillffi/issues/43) |
+| Bare metal          | ⏳ [#44](https://github.com/miruji/chillffi/issues/44) |
+| Сборка как `cdylib` | ❌                                                     |
 
 ## 🚀 Quick Start
 
@@ -70,7 +70,7 @@ fn main() -> ()
     let libm: Library = scope.load("libm.so.6")?;
   
     // Call the "sqrt" function, specifying the expected return type
-    Ok( libm.call("sqrt").arg::<f64>(4.0).result()? )
+    libm.call("sqrt").arg::<f64>(4.0).result()
     
     // Here libm will be automatically cleared due to drop() when exiting the closure.
     // You can also do this manually via drop(libm) or libm.unload()?
