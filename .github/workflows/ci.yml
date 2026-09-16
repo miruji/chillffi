@@ -47,6 +47,10 @@ jobs:
         with:
           cache-on-failure: true # Always do it.
       
+      # 
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      
       # Build and compatibility check.
       - name: Run tests
         run: cargo test

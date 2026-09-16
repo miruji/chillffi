@@ -29,7 +29,7 @@ fn main() -> ()
 /// and treats `-fPIC` as a no-op, so a single command line used to work on
 /// both platforms. That is an undocumented compatibility quirk, not a stable
 /// contract — we branch explicitly instead.
-fn sharedLibSpec() -> (&'static [&'static str], &'static str)
+const fn sharedLibSpec() -> (&'static [&'static str], &'static str)
 {
   #[cfg(target_os = "macos")]
   {

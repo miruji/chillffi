@@ -7,7 +7,6 @@ edition = "2024"
 authors = ["miruji <miruji@protonmail.com>"]
 description = "A simple isolated dynamic FFI framework for Rust"
 license-file = "LICENSE.md" # FCL
-readme = "README.md"
 
 # ======================================================================================================================
 

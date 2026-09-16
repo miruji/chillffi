@@ -91,9 +91,9 @@ fn structAsCallResult() -> ()
     let valuesPtr: Pointer = fields.get(1)?;
 
     let bytes: Vec<u8> = Scope::readMemory(valuesPtr, size as usize * 4)?;
-    let values: Vec<i32> = bytes
-      .chunks_exact(4)
-      .map(|c| i32::from_ne_bytes(c.try_into().expect("4-byte chunk")))
+    let values: Vec<i32> = bytes.as_chunks::<4>().0
+      .iter()
+      .map(|b| i32::from_ne_bytes(*b))
       .collect();
 
     // process() malloc'd both the struct and its values array — free both

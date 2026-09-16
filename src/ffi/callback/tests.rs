@@ -39,8 +39,9 @@ fn roundtrip() -> ()
       .void()?;
 
     let bytes: Vec<u8> = mem.read()?;
-    Ok(bytes.chunks_exact(4)
-      .map(|b| i32::from_ne_bytes(b.try_into().unwrap()))
+    Ok(bytes.as_chunks::<4>().0
+      .iter()
+      .map(|b| i32::from_ne_bytes(*b))
       .collect())
   }).expect("qsort failed");
 
@@ -81,8 +82,9 @@ fn externalCaptureReachesTheClone() -> ()
       .void()?;
 
     let bytes: Vec<u8> = mem.read()?;
-    Ok(bytes.chunks_exact(4)
-      .map(|b| i32::from_ne_bytes(b.try_into().unwrap()))
+    Ok(bytes.as_chunks::<4>().0
+      .iter()
+      .map(|b| i32::from_ne_bytes(*b))
       .collect())
   }).expect("qsort failed");
 
@@ -191,8 +193,9 @@ fn copyStructCaptureReachesTheClone() -> ()
       .void()?;
 
     let bytes: Vec<u8> = mem.read()?;
-    Ok(bytes.chunks_exact(4)
-      .map(|b| i32::from_ne_bytes(b.try_into().unwrap()))
+    Ok(bytes.as_chunks::<4>().0
+      .iter()
+      .map(|b| i32::from_ne_bytes(*b))
       .collect())
   }).expect("qsort with a struct capture failed");
 

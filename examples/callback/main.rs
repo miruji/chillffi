@@ -47,7 +47,10 @@ fn noCaptures() -> ()
       .void()?;
 
     let bytes: Vec<u8> = mem.read()?;
-    Ok(bytes.chunks_exact(4).map(|b| i32::from_ne_bytes(b.try_into().unwrap())).collect())
+    Ok(bytes.as_chunks::<4>().0
+      .iter()
+      .map(|b| i32::from_ne_bytes(*b))
+      .collect())
   }).expect("qsort failed");
 
   assert_eq!(sorted, vec![1, 1, 3, 4, 5]);
@@ -88,7 +91,10 @@ fn multipleCapturedVariables() -> ()
       .void()?;
 
     let bytes: Vec<u8> = mem.read()?;
-    Ok(bytes.chunks_exact(4).map(|b| i32::from_ne_bytes(b.try_into().unwrap())).collect())
+    Ok(bytes.as_chunks::<4>().0
+      .iter()
+      .map(|b| i32::from_ne_bytes(*b))
+      .collect())
   }).expect("qsort failed");
 
   assert_eq!(sorted, vec![5, 4, 3, 1, 1]);

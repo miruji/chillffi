@@ -89,19 +89,17 @@ fn float() -> ()
 {
   let resultF32: f32 = ffi!(|scope| {
     let libm: Library = scope.load(LibmPath)?;
-    Ok( libm.call("sqrtf").arg::<f32>(16.0).result()? )
+    libm.call("sqrtf").arg::<f32>(16.0).result()
   }).expect("FFI F32 call failed");
 
   assert!((resultF32 - 4.0).abs() < f32::EPSILON);
 
   let resultF64: f64 = ffi!(|scope| {
     let libm: Library = scope.load(LibmPath)?;
-    Ok(
-      libm.call("pow")
-        .arg::<f64>(2.0)
-        .arg::<f64>(3.0)
-        .result()?
-    )
+    libm.call("pow")
+      .arg::<f64>(2.0)
+      .arg::<f64>(3.0)
+      .result()
   }).expect("FFI F64 call failed");
 
   assert!((resultF64 - 8.0).abs() < f64::EPSILON);
@@ -115,7 +113,7 @@ fn bool() -> ()
 {
   let result: bool = ffi!(|scope| {
     let libc: Library = scope.load(LibcPath)?;
-    Ok( libc.call("isalpha").arg(true).result()? )
+    libc.call("isalpha").arg(true).result()
   }).expect("FFI Bool call failed");
 
   assert!(!result);
@@ -130,11 +128,9 @@ fn pointer() -> ()
 {
   let result: Pointer = ffi!(|scope| {
     let libc: Library = scope.load(LibcPath)?;
-    Ok(
-      libc.call("getenv")
-        .arg(c"noSuchVar")
-        .result()?
-    )
+    libc.call("getenv")
+      .arg(c"noSuchVar")
+      .result()
   }).expect("FFI pointer call failed");
 
   assert_eq!(result, Pointer(0));
@@ -196,11 +192,9 @@ fn cString() -> ()
 {
   let result: usize = ffi!(|scope| {
     let libc: Library = scope.load(LibcPath)?;
-    Ok(
-      libc.call("strlen")
-        .arg(c"hello")
-        .result()?
-    )
+    libc.call("strlen")
+      .arg(c"hello")
+      .result()
   }).expect("FFI CString call failed");
 
   assert_eq!(result, 5);
@@ -213,11 +207,9 @@ fn string() -> ()
 {
   let result: usize = ffi!(|scope| {
     let libc: Library = scope.load(LibcPath)?;
-    Ok(
-      libc.call("strnlen")
-        .arg("hello world")
-        .result()?
-    )
+    libc.call("strnlen")
+      .arg("hello world")
+      .result()
   }).expect("FFI String call failed");
 
   assert_eq!(result, 11);
@@ -229,11 +221,9 @@ fn rawString() -> ()
 {
   let result: i32 = ffi!(|scope| {
     let libc: Library = scope.load(LibcPath)?;
-    Ok(
-      libc.call("atoi")
-        .arg(b"12345\0".to_vec())
-        .result()?
-    )
+    libc.call("atoi")
+      .arg(b"12345\0".to_vec())
+      .result()
   }).expect("FFI RawString call failed");
 
   assert_eq!(result, 12345);

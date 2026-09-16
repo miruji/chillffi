@@ -138,6 +138,7 @@ pub mod sealed
 ///   - the clone is not a different program on a different machine but a
 ///     fork/re-exec of this exact binary, so the concrete monomorphized
 ///     `F`'s layout is byte-for-byte identical on both ends.
+/// 
 /// This means captures are restricted to plain, stack-only data (numbers,
 /// bools, pointers, `#[derive(Clone, Copy)]` structs, ...) — no `String`,
 /// `Vec`, `Box`, or anything else that owns a heap allocation. That is a

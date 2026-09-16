@@ -735,6 +735,86 @@ mod tests
   }
 
   // ===============================================================================================
+
+  /// Repeated sequential `ffi!` blocks stress the control plane:
+  /// each iteration does `SpawnClone` → IPC bootstrap → drop/kill.
+  /// This is the minimal regression for the IPC race that previously
+  /// appeared only under high test volume (many independent clones
+  /// from one main zygote in a single process).
+  #[test]
+  fn sequentialCloneStress() -> ()
+  {
+    const Iterations: usize = 50;
+
+    for i in 0..Iterations
+    {
+      let result: f64 = ffi!(|scope| {
+        let libm: Library = scope.load(LibmPath)?;
+        libm.call("sqrt").arg::<f64>(4.0).result()
+      }).unwrap_or_else(|e| panic!("sequential clone stress failed on iteration {i}: {e}"));
+
+      assert!((result - 2.0).abs() < f64::EPSILON, "unexpected sqrt result on iteration {i}");
+    }
+  }
+
+  /// Concurrent `ffi!` from several threads is the scenario that
+  /// exposed the original Darwin IPC bug (dead FD / "Bogus destination
+  /// port" under parallel `SpawnClone`). Channels are created after
+  /// `fork` and handed over via `IpcOneShotServer`; this test keeps
+  /// pressure on that path so a regression cannot hide behind
+  /// sequential-only runs.
+  #[test]
+  fn concurrentCloneStress() -> ()
+  {
+    use std::thread;
+
+    const Threads: usize = 8;
+    const PerThread: usize = 20;
+
+    let handles: Vec<thread::JoinHandle<()>> = (0..Threads)
+      .map(|t| {
+        thread::spawn(move || {
+          for i in 0..PerThread
+          {
+            let result: f64 = ffi!(|scope| {
+              let libm: Library = scope.load(LibmPath)?;
+              libm.call("sqrt").arg::<f64>(4.0).result()
+            }).unwrap_or_else(|e| {
+              panic!("concurrent clone stress failed on thread {t} iteration {i}: {e}")
+            });
+
+            assert!(
+              (result - 2.0).abs() < f64::EPSILON,
+              "unexpected sqrt result on thread {t} iteration {i}"
+            );
+          }
+        })
+      })
+      .collect();
+
+    for handle in handles
+    {
+      handle.join().expect("concurrent clone stress thread panicked");
+    }
+  }
+
+  /// Pure create/drop of clones without any FFI call.
+  /// Isolates the control-plane path (`SpawnClone` + channel
+  /// bootstrap + kill) from library loading and `libffi` work.
+  #[test]
+  fn rapidCloneCreateDrop() -> ()
+  {
+    const Iterations: usize = 100;
+
+    for i in 0..Iterations
+    {
+      let zygote: crate::zygote::ClonedZygote = crate::zygote::ClonedZygote::getMeClone()
+        .unwrap_or_else(|e| panic!("getMeClone failed on iteration {i}: {e}"));
+      drop(zygote);
+    }
+  }
+
+  // ===============================================================================================
 }
 
 // =================================================================================================
