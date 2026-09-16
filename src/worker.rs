@@ -238,7 +238,6 @@ fn prepareFFIArgs<'a>(
       }
       Value::CString(v) => {
         let mut vec: Vec<u8> = v.clone();
-        if !vec.ends_with(&[0]) { vec.push(0); } // Guarantee \0
         let pointer: *mut c_void = vec.as_mut_ptr() as *mut c_void;
         storage.push(Box::new((vec, pointer)));
       }
@@ -725,13 +724,10 @@ pub fn executeFFI(
       // Value::CString stores bytes WITHOUT the trailing NUL (see From<&CStr>/CString),
       // but WriteMemory of a C string must place '\0' in the target buffer so that
       // strlen / C APIs see a valid C string. RawString is copied verbatim.
-      let owned: Vec<u8> = match &value {
+      let owned: Vec<u8> = match &value 
+      {
         Value::RawString(v) => v.clone(),
-        Value::CString(v) => {
-          let mut b: Vec<u8> = v.clone();
-          b.push(0);
-          b
-        }
+        Value::CString(v) => v.clone(),
         _ => {
           return Err(FFIError::BadArgument(
             "expected RawString or CString for WriteMemory".to_string(),

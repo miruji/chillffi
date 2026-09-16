@@ -7,37 +7,56 @@ use std::ffi::CString;
 impl From<String> for Value
 {
   /// Converts a Rust [`String`] into [`Value::String`] (ptr + len).
-  fn from(s: String) -> Self { Self::String(s.into_bytes()) }
+  fn from(s: String) -> Self
+  {
+    Self::String(s.into_bytes())
+  }
 }
 
 impl From<&str> for Value
 {
   /// Converts a string slice `&str` into [`Value::String`] (ptr + len).
-  fn from(s: &str) -> Self { Self::String(s.as_bytes().to_vec()) }
+  fn from(s: &str) -> Self
+  {
+    Self::String(s.as_bytes().to_vec())
+  }
 }
 
-impl From<CString> for Value
+
+impl From<CString> for Value 
 {
   /// Converts a [`CString`] into [`Value::CString`].
-  fn from(c: CString) -> Self { Self::CString(c.into_bytes()) }
+  fn from(c: CString) -> Self 
+  {
+    Self::CString(c.into_bytes_with_nul())
+  }
 }
 
-impl From<&CStr> for Value
+impl From<&CStr> for Value 
 {
   /// Converts a C-string literal (`c"hello"`) into [`Value::CString`].
-  fn from(c: &CStr) -> Self { Self::CString(c.to_bytes().to_vec()) }
+  fn from(c: &CStr) -> Self
+  {
+    Self::CString(c.to_bytes_with_nul().to_vec())
+  }
 }
 
 impl From<Vec<u8>> for Value
 {
   /// Converts raw bytes `Vec<u8>` into [`Value::RawString`].
-  fn from(v: Vec<u8>) -> Self { Self::RawString(v) }
+  fn from(v: Vec<u8>) -> Self
+  {
+    Self::RawString(v)
+  }
 }
 
 impl From<&[u8]> for Value
 {
   /// Converts a byte slice `&[u8]` into [`Value::RawString`].
-  fn from(v: &[u8]) -> Self { Self::RawString(v.to_vec()) }
+  fn from(v: &[u8]) -> Self
+  {
+    Self::RawString(v.to_vec())
+  }
 }
 
 impl TryFrom<Value> for String
@@ -61,8 +80,8 @@ impl TryFrom<Value> for CString
   fn try_from(value: Value) -> Result<Self, Self::Error>
   {
     let bytes: Vec<u8> = extractStringBytes(value)?;
-    Self::new(bytes)
-      .map_err(|e| FFIError::Other(format!("interior NUL byte: {e}")))
+    Self::from_vec_with_nul(bytes)
+      .map_err(|e| FFIError::Other(format!("invalid C string: {e}")))
   }
 }
 

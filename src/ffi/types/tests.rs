@@ -178,7 +178,7 @@ fn stringBridges() -> ()
   assert_eq!(valStr, Value::String(b"hello".to_vec()));
 
   let valCString: Value = CString::new("hello").unwrap().into();
-  assert_eq!(valCString, Value::CString(b"hello".to_vec()));
+  assert_eq!(valCString, c"hello".into());
 
   let valRawBytes: Value = vec![0u8, 1, 2].into();
   assert_eq!(valRawBytes, Value::RawString(vec![0, 1, 2]));
