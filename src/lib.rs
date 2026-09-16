@@ -1,30 +1,10 @@
 //! **A simple isolated dynamic FFI framework for Rust.**
 //!
-//! `chillffi` allows dynamically loading C libraries `.so` and calling their
-//! functions at runtime, **isolating the calls in a separate empty process**.
-//!
-//! If third-party C code crashes or corrupts something, your main Rust
-//! application will continue running.
-//!
-//! _(In the future, an expansion of the functionality for working with FFI is
-//! planned.)_
-//!
-//! # Platform support
-//!
-//! Supported only on Unix-like OSes.
-//!
-//! _(Planned: Windows, WASM, Bare metal.)_
-//!
-//! # Features
-//!
-//! - **Crash Isolation**: A crash or panic inside unreliable FFI code does not
-//!   break or corrupt the main process.
-//! - **Zygote Model**: Fast forking and spawning of isolated workers with
-//!   minimal overhead.
-//! - **In-memory IPC**: Transfer of file descriptors and data through sockets
-//!   without accessing the disk.
-//! - **Dynamic FFI**: On-the-fly function calls without the need to compile
-//!   static C bindings.
+//! `chillffi` allows dynamically loading **C ABI-compatible libraries** 
+//! and calling their functions at runtime, **isolating each FFI call in a separate process**.
+//! If third-party native code crashes or corrupts memory, 
+//! the failure is contained within the isolated process, 
+//! keeping your main Rust application running.
 //!
 //! # Quick start
 //!
@@ -50,10 +30,9 @@
 //!   assert!((result - 2.0).abs() < f64::EPSILON, "sqrt(4.0) != 2.0");
 //! }
 //! ```
-//!
-//! For memory-sensitive operations — C strings, out-parameters, or raw
-//! buffers — use the scoped variant with [`Scope`](crate::ffi::scope::Scope)
-//! and [`AllocatedMemory`](crate::ffi::allocatedMemory::AllocatedMemory):
+//! 
+//! Example of a memory-sensitive call to the `clock_gettime` function 
+//! from the system library `libc.so.6` using [`AllocatedMemory`](ffi::allocatedMemory::AllocatedMemory):
 //!
 //! ```no_run
 //! use chillffi::ffi::allocatedMemory::{AllocatedMemory};
@@ -88,6 +67,8 @@
 //! ```
 //!
 //! For more detailed examples, see the `examples` folder.
+//! 
+//! The tests there are divided by features, and inside there are different usage variations.
 //!
 //! You can also run them via `cargo run --example <name>`.
 //!

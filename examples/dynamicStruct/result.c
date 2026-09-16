@@ -1,6 +1,6 @@
 #include <stdlib.h>
 
-// A C function returning a pointer to a 
+// A C function returning a pointer to a
 // struct it allocated dynamically on the heap.
 
 struct Data {

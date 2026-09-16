@@ -1,22 +1,27 @@
+#[path = "../platform/mod.rs"]
+mod platform;
+use crate::platform::platformExt;
+// =================================================================================================
 use chillffi::ffi;
 use chillffi::ffi::types::primitive::Pointer;
 use chillffi::pathResolver::addGlobalSearchPath;
 // =================================================================================================
 
-/// Test library resolution using direct paths, 
-/// scope search paths, and global search paths
+/// Library resolution: direct path, scope search path, and global search path.
 fn main() -> ()
 {
-  testRawPath();
-  testScopePath();
-  testGlobalPath();
+  rawPath();
+  scopePath();
+  globalPath();
 }
 
-/// A path with '/' — PathResolver is not involved; it goes directly to dlopen.
-fn testRawPath() -> ()
+// =================================================================================================
+
+/// Path with '/' — goes straight to dlopen, PathResolver is skipped.
+fn rawPath() -> ()
 {
   let result: Pointer = ffi!(|scope| {
-    let libprint: Library = scope.load("./examples/paths/libprint.so")?;
+    let libprint: Library = scope.load(platformExt!("./examples/paths/libprint"))?;
     libprint.call("print")
       .arg("raw path\n")
       .result()
@@ -26,12 +31,12 @@ fn testRawPath() -> ()
   println!("ok: raw path");
 }
 
-/// Temporary path through scope — resolves only inside this block.
-fn testScopePath() -> ()
+/// Scope search path — only visible inside this block.
+fn scopePath() -> ()
 {
   let result: Pointer = ffi!(|scope| {
     scope.addSearchPath("examples/paths");
-    let libprint: Library = scope.load("libprint.so")?;
+    let libprint: Library = scope.load(platformExt!("libprint"))?;
     libprint.call("print")
       .arg("scope path\n")
       .result()
@@ -41,13 +46,13 @@ fn testScopePath() -> ()
   println!("ok: scope path");
 }
 
-/// The global path — set once, visible in all subsequent blocks.
-fn testGlobalPath() -> ()
+/// Global search path — visible in all later blocks.
+fn globalPath() -> ()
 {
   addGlobalSearchPath("examples/paths");
 
   let result: Pointer = ffi!(|scope| {
-    let libprint: Library = scope.load("libprint.so")?;
+    let libprint: Library = scope.load(platformExt!("libprint"))?;
     libprint.call("print")
       .arg("global path\n")
       .result()

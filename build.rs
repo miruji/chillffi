@@ -1,15 +1,14 @@
-use std::process::ExitStatus;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitStatus};
 // =================================================================================================
 
 fn main() -> ()
 {
   // Compiles C sources within the examples directory.
   let examplesDir: &Path = Path::new("examples");
-  if examplesDir.exists() 
+  if examplesDir.exists()
   { // Watching each individual .c file only protects files Cargo
     // already knew about the last time this ran — a brand new .c file was
     // never in that list, so it stayed invisible and never got compiled.
@@ -19,10 +18,34 @@ fn main() -> ()
   }
 }
 
+// =================================================================================================
+
+/// Shared-library link flags and file extension for the current host.
+///
+/// - Linux / other Unix: GNU-style `-shared -fPIC` → `libfoo.so` (ELF)
+/// - macOS: Apple clang `-dynamiclib` → `libfoo.dylib` (Mach-O)
+///
+/// Apple clang historically accepts `-shared` as a synonym for `-dynamiclib`
+/// and treats `-fPIC` as a no-op, so a single command line used to work on
+/// both platforms. That is an undocumented compatibility quirk, not a stable
+/// contract — we branch explicitly instead.
+fn sharedLibSpec() -> (&'static [&'static str], &'static str)
+{
+  #[cfg(target_os = "macos")]
+  {
+    (&["-dynamiclib"], "dylib")
+  }
+  #[cfg(not(target_os = "macos"))]
+  {
+    (&["-shared", "-fPIC"], "so")
+  }
+}
+
 /// Recursively compiles C source files into shared libraries.
 fn compileDir(dir: &Path) -> ()
 {
   let Ok(entries) = fs::read_dir(dir) else { return };
+  let (flags, ext) = sharedLibSpec();
 
   for entry in entries.flatten()
   {
@@ -36,14 +59,15 @@ fn compileDir(dir: &Path) -> ()
     println!("cargo:rerun-if-changed={}", path.display());
 
     let stem: &str = path.file_stem().unwrap().to_str().unwrap();
-    let output: PathBuf = path.with_file_name(format!("lib{}.so", stem));
+    let output: PathBuf = path.with_file_name(format!("lib{stem}.{ext}"));
 
     if isFresh(&path, &output) { continue; }
 
-    // Execute compiler to generate a shared object.
+    // Execute compiler to generate a shared object / dylib.
     let compiler: String = env::var("CC").unwrap_or_else(|_| "cc".into());
     let status: std::io::Result<ExitStatus> = Command::new(compiler)
-      .args(["-shared", "-fPIC", "-o"])
+      .args(flags)
+      .arg("-o")
       .arg(&output)
       .arg(&path)
       .status();

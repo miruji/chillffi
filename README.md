@@ -6,38 +6,60 @@
 [![Documentation](https://docs.rs/chillffi/badge.svg)](https://docs.rs/chillffi)
 [![License: FCL](https://img.shields.io/badge/License-FCL-blue.svg)](LICENSE.md)
 
-`chillffi` allows dynamically loading C libraries `.so`
-and calling their functions at runtime, **isolating the calls in a separate empty process**.
-
-If third-party C code crashes or corrupts something, your main Rust application will continue running.
-
-_(In the future, an expansion of the functionality for working with FFI is planned.)_
+`chillffi` allows dynamically loading **C ABI-compatible libraries** 
+and calling their functions at runtime, **isolating each FFI call in a separate process**.
+If third-party native code crashes or corrupts memory, 
+the failure is contained within the isolated process, 
+keeping your main Rust application running.
 
 ---
 
 ## ✨ Features
 
-- 🛡️ **Crash Isolation**: A crash or panic inside unreliable FFI code does not break or corrupt the main process.
-- ⚡ **Zygote Model (Zygote)**: Fast forking and spawning of isolated workers with minimal overhead.
-- 🚀 **In-memory IPC**: Transfer of file descriptors and data through sockets without accessing the disk.
-- 🧩 **Dynamic FFI**: On-the-fly function calls without the need to compile static C bindings.
+| Feature                  | Status                                                                                           |
+|--------------------------|--------------------------------------------------------------------------------------------------|
+| Crash isolation          | ✅ A separate process for FFI that does not break your Runtime.                                   |
+| Native FFI execution     | ✅ Not a VM, not large in size, and does not require large dependencies.                          |
+| Startup speed            | ✅ The Zygote model does not retain garbage and uses a fast `fork` for each FFI.                  |
+| IPC                      | ✅ `ipc-channel` provides serialization and is implemented for different platforms.               |
+| Multithreading and async | ✅ Does not break with multithreading and async                                                   |
+| Scope                    | ✅ Scope for FFI execution areas (`ffi!`); so that they are short and do not escape.              |
+| Retained Scope           | ✅ Temporary retention of the FFI scope for dynamic systems.                                      |
+| Dynamic loading          | ✅ `libffi` is simple, stable, cross-platform, and small in size.                                 |
+| Path resolver            | ✅ Global, scope-level, and direct path resolver for libraries.                                   |
+| Static FFI               | ✅ Through Rust code.                                                                             |
+| Dynamic FFI              | ✅ On-the-fly function calls without the need to compile static C bindings.                       |
+| Static structures        | ✅ `repr` structures.                                                                             |
+| Dynamic structures       | ✅ Reading and writing structures with arbitrary layouts.                                         |
+| Pointer-based structures | ✅ Support for passing structures through pointers.                                               |
+| By-value structures      | ⏳ Support for passing structures by value. [#46](https://github.com/rts-lang/chillffi/issues/46) |
+| Allocation handling      | ✅ Allocation of a memory region for FFI.                                                         |
+| Callbacks                | ✅ Passing closures as C functions (`callback!`).                                                 |
+| Signals                  | ✅ Working with signals and calling pointers (`callvPointer`, `callPointer`).                     |
+| Errno Policy             | ✅ Configuring errno reading at the call, scope, or global level.                                 |
+| String data types        | String (`""`), CString (`c""`), RawString (`b""`).                                               |
+| Sandbox (FS protection)  | ⏳ [#45](https://github.com/rts-lang/chillffi/issues/45)                                          |
+| Libraries from bytes     | ⏳ [#42](https://github.com/rts-lang/chillffi/issues/42)                                          |
 
 ---
 
 ## 📦 Installation
 
-Add the dependency to `Cargo.toml`:
+Add the dependency to `Cargo.toml`. There are no separate configuration flags.
 
-> [!NOTE]
->
-> Supported only on Unix-like OSes.
->
-> _(Planned: Windows, WASM, Bare metal.)_
+| Platforms            | Status                                                  |
+|----------------------|---------------------------------------------------------|
+| Linux                | ✅                                                       |
+| macOS                | ✅                                                       |
+| Windows              | ⏳                                                       |
+| WASM                 | ⏳ [#43](https://github.com/rts-lang/chillffi/issues/43) |
+| Bare metal           | ⏳ [#44](https://github.com/rts-lang/chillffi/issues/44) |
+| Build as `cdylib`    | ❌                                                       |
 
 ## 🚀 Quick Start
 
-Example of a safe call to the `sqrt` function from the system library `libm.so.6` using the `ffi!{}` macro and explicit typing:
-
+Example of a safe call to the `sqrt` function from the system library `libm.so.6` 
+using the `ffi!{}` macro and explicit typing:
 ```rust
 fn main() -> ()
 {
@@ -47,7 +69,7 @@ fn main() -> ()
     let libm: Library = scope.load("libm.so.6")?;
   
     // Call the "sqrt" function, specifying the expected return type
-    Ok( libm.call("sqrt").arg::<f64>(4.0).result()? )
+    libm.call("sqrt").arg::<f64>(4.0).result()
     
     // Here libm will be automatically cleared due to drop() when exiting the closure.
     // You can also do this manually via drop(libm) or libm.unload()?
@@ -59,8 +81,8 @@ fn main() -> ()
 }
 ```
 
-For memory-sensitive operations — C strings, out-parameters, or raw buffers —
-use the scoped variant with `Scope` and `AllocatedMemory`:
+Example of a memory-sensitive call to the `clock_gettime` function 
+from the system library `libc.so.6` using `AllocatedMemory`:
 ```rust
 fn main() -> ()
 {
@@ -92,6 +114,8 @@ fn main() -> ()
 ```
 
 For more detailed examples, see the [examples](examples) folder.
+
+The tests there are divided by features, and inside there are different usage variations.
 
 You can also run them via `cargo run --example <name>`.
 
@@ -152,8 +176,6 @@ This is also different from the WASM approach - because we preserve a true nativ
 > Because no one can guarantee that any FFI request will not break your code.
 >
 > Even if you are an experienced programmer, there are things that do not depend on your experience.
-
-<!-- ## 🧭 Roadmap (todo better about capabilities) -->
 
 ## 📄 License
 

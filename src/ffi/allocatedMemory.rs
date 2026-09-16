@@ -9,7 +9,7 @@ use std::marker::PhantomData;
 
 /// AllocatedMemory itself is needed when allocating memory on the Rust side;
 /// It is an RAII wrapper over memory allocated on the heap of the zygote
-/// clone via [`Library::alloc`]; Automatically sends a `Free` request 
+/// clone via [`Scope::alloc`](crate::ffi::scope::Scope::alloc); Automatically sends a `Free` request 
 /// when going out of scope (`Drop`).
 ///
 /// Important: `Library` has its own methods for working with memory -
@@ -298,6 +298,42 @@ mod tests
     // Both fields should be non-zero for a real time
     assert!(ts.secs > 0, "seconds should be positive, got {}", ts.secs);
     assert!(ts.nanos >= 0 && ts.nanos < 1_000_000_000, "nanos should be in [0, 1e9), got {}", ts.nanos);
+  }
+
+  // ===============================================================================================
+
+  /// [`AllocatedMemory::readStruct`] must refuse a buffer smaller than
+  /// `size_of::<T>()`, not silently read past the allocation.
+  #[test]
+  fn readStructBufferTooSmall() -> ()
+  {
+    use crate::ffi::errors::FFIError;
+
+    let err: FFIError = ffi!(|scope| {
+      // TestStruct is 16 bytes; this buffer is only 4.
+      let mem: AllocatedMemory = scope.alloc(4)?;
+      Ok(mem.readStruct::<TestStruct>())
+    }).expect("ffi block failed")
+      .expect_err("readStruct into an undersized buffer should fail");
+
+    assert!(matches!(err, FFIError::Other(_)), "unexpected error: {err:?}");
+  }
+
+  /// Write-side mirror: [`AllocatedMemory::writeStruct`] must refuse to
+  /// write a `T` bigger than the buffer it was allocated with.
+  #[test]
+  fn writeStructBufferTooSmall() -> ()
+  {
+    use crate::ffi::errors::FFIError;
+
+    let err: FFIError = ffi!(|scope| {
+      let mem: AllocatedMemory = scope.alloc(4)?;
+      let value: TestStruct = TestStruct { a: 1, b: 2 };
+      Ok(mem.writeStruct(&value))
+    }).expect("ffi block failed")
+      .expect_err("writeStruct into an undersized buffer should fail");
+
+    assert!(matches!(err, FFIError::Other(_)), "unexpected error: {err:?}");
   }
 
   // ===============================================================================================

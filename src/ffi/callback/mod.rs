@@ -71,7 +71,7 @@ pub fn decode(bytes: &[u8]) -> Result<ErasedCallable, CallError>
   // As a second line of defense, the target function re-checks both the
   // call-site tag and the argument/return type tag before it deserializes
   // anything.
-  let decodeFn: DecodeFn = unsafe { std::mem::transmute(absoluteAddr) };
+  let decodeFn: DecodeFn = unsafe{ std::mem::transmute(absoluteAddr) };
   decodeFn(envelope.siteTag, envelope.argsOutputTag, &envelope.bytes)
 }
 

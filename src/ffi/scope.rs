@@ -304,7 +304,8 @@ impl<'g> Scope<'g>
     self.callPointerImpl(pointer, args, None)
   }
 
-  /// Fire-and-forget variant of `callPointer` — mirrors `Library::callv`.
+  /// Fire-and-forget variant of `callPointer` — mirrors
+  /// [`CallBuilder::void`](crate::ffi::library::CallBuilder::void).
   #[inline]
   pub fn callvPointer(
     &self,
@@ -462,7 +463,8 @@ macro_rules! callPointer
   };
 }
 
-/// Fire-and-forget variant of [`callPointer!`] — mirrors [`callv!`].
+/// Fire-and-forget variant of [`callPointer!`] — mirrors
+/// [`CallBuilder::void`](crate::ffi::library::CallBuilder::void).
 #[macro_export]
 macro_rules! callvPointer
 {
@@ -476,15 +478,17 @@ macro_rules! callvPointer
 #[cfg(test)]
 mod tests
 {
+  use crate::callback;
   use crate::ffi;
   use crate::ffi::allocatedMemory::AllocatedMemory;
   use crate::ffi::errors::FFIError;
   use crate::ffi::library::Library;
   use crate::ffi::scope::FFIScope;
   use crate::ffi::scope::Scope;
-  use crate::ffi::types::primitive::{Arg, DynamicList, Pointer};
+  use crate::ffi::types::primitive::{Arg, Callback, DynamicList, Pointer};
   use crate::ffi::types::Type;
-  use crate::platform::{LibcPath, LibmPath};
+  use crate::pathResolver::addGlobalSearchPath;
+  use crate::platform::{platformExt, LibcPath, LibmPath};
   // ===============================================================================================
 
   /// Checks explicit memory release via [`Scope::free`].
@@ -637,8 +641,7 @@ mod tests
   fn scopeRetention() -> ()
   {
     // Direct RAII form: hold the scope ourselves and run several ops through it.
-    let (r1, r2): (f64, i32) = (|| -> Result<_, FFIError>
-    {
+    let (r1, r2): (f64, i32) = (|| -> Result<_, FFIError> {
       let ffiScope: FFIScope = FFIScope::enter()?;
       let scope: Scope<'_> = ffiScope.scope();
 
@@ -663,6 +666,143 @@ mod tests
     //
     assert!((r1 - 3.0).abs() < f64::EPSILON, "sqrt(9) != 3, got {}", r1);
     assert_eq!(r2, 8, "strlen(\"retained\") != 8, got {}", r2);
+  }
+
+  // ===============================================================================================
+
+  /// Below `sizeof(void*)` (8 on x86_64), an odd alignment is silently
+  /// bumped up to the minimum rather than rejected — so this must pick an
+  /// alignment *above* that floor to actually exercise the "not a power of
+  /// 2" rejection in `AllocAligned`'s handler.
+  #[test]
+  fn allocAlignedRejectsNonPowerOfTwoAlignment() -> ()
+  {
+    let err: FFIError = ffi!(|scope| {
+      let _mem: AllocatedMemory = scope.allocAligned(64, 24 /* >= 8, not a power of 2 */)?;
+      Ok(())
+    }).expect_err("a non-power-of-2 alignment above the minimum should be rejected");
+
+    assert!(matches!(err, FFIError::Other(_)), "unexpected error: {err:?}");
+  }
+
+  // ===============================================================================================
+
+  /// A per-call `.noErrno()` must beat the scope-level `setReadErrno(true)`
+  /// default — the opposite priority from `scopeDefaultEnablesErrno` above.
+  #[test]
+  fn noErrnoOverridesScopeDefault() -> ()
+  {
+    let errno: Option<i32> = ffi!(|scope| {
+      scope.setReadErrno(true); // scope default: capture errno
+      let libc: Library = scope.load(LibcPath)?;
+      let fd: i32 =
+        libc.call("open")
+          .arg(c"/no/such/chillffi/noErrno/path")
+          .arg::<i32>(0 /* O_RDONLY */)
+          .noErrno() // per-call override should win over the scope default
+          .result()?;
+      assert_eq!(fd, -1);
+      Ok(Scope::lastErrno())
+    }).expect("noErrno override test failed");
+
+    assert_eq!(errno, None, "noErrno() should have suppressed errno capture entirely");
+  }
+
+  // ===============================================================================================
+
+  /// `Scope::load` resolves scope search paths before falling back to the
+  /// global ones. Two directories hold a file with the *same* name — the
+  /// global one holds garbage bytes, the scope one holds a real, valid
+  /// `.so` (reused from the `paths` example, built by `build.rs`). If the
+  /// global path won instead, the load below would fail with
+  /// `LibraryLoadFailed`, not succeed.
+  #[test]
+  fn scopePathBeatsGlobalPath() -> ()
+  {
+    use std::fs;
+    use std::env::temp_dir;
+
+    let libName: &str = platformExt!("chillffiScopeVsGlobalPriority");
+
+    let globalDir: std::path::PathBuf = temp_dir().join("chillffiGlobalPriorityTest");
+    fs::create_dir_all(&globalDir).expect("create global test dir");
+    fs::write(globalDir.join(libName), b"not a real shared library").expect("write garbage");
+    addGlobalSearchPath(&globalDir);
+
+    let scopeDir: std::path::PathBuf = temp_dir().join("chillffiScopePriorityTest");
+    fs::create_dir_all(&scopeDir).expect("create scope test dir");
+    let realSo = format!("{}{}", env!("CARGO_MANIFEST_DIR"), platformExt!("/examples/paths/libprint"));
+    fs::copy(realSo, scopeDir.join(libName))
+      .expect("examples/paths must be built first (cargo build --examples / cargo test builds it too)");
+
+    let result: Pointer = ffi!(|scope| {
+      scope.addSearchPath(&scopeDir);
+      let lib: Library = scope.load(libName)?;
+      lib.call("print").arg("priority test\n").result() // todo Она выходит за test
+    }).expect("scope path should have taken priority over the global one");
+
+    assert!(matches!(result, Pointer(0)));
+
+    fs::remove_dir_all(&globalDir).ok();
+    fs::remove_dir_all(&scopeDir).ok();
+  }
+
+  // ===============================================================================================
+
+  /// Reading past the number of fields a shape actually describes must
+  /// fail, not read adjacent memory or panic.
+  #[test]
+  fn dynamicListGetOutOfBoundsErrs() -> ()
+  {
+    let err: FFIError = ffi!(|scope| {
+      let mem: AllocatedMemory = scope.allocStruct(&[Type::I32])?;
+      let fields: DynamicList = Scope::readDynamicStruct(mem.address(), &[Type::I32])?;
+      Ok(fields.get::<i64>(5)) // only field 0 exists
+    }).expect("ffi block failed")
+      .expect_err("reading an out-of-bounds field index should fail");
+
+    assert!(matches!(err, FFIError::Other(_)), "unexpected error: {err:?}");
+  }
+
+  // ===============================================================================================
+
+  /// Exercises `callPointer`/`callvPointer`/`callPointerErrno` together —
+  /// previously covered only by the `callPointer` example, never by a unit
+  /// test. `signal()` both takes and returns a `void (*)(int)` handler,
+  /// which is the only practical way to get a real, known-good raw pointer
+  /// without exposing `dlsym` on the public API.
+  #[test]
+  fn callPointerAndCallvPointerRoundtrip() -> ()
+  {
+    let secondRead: i32 = ffi!(|scope| {
+      let libc: Library = scope.load(LibcPath)?;
+      let mem: AllocatedMemory = scope.alloc(4)?;
+      let addr: usize = mem.address();
+
+      // A `void (*)(int)` handler — the exact shape `signal()` installs and
+      // returns, so its address can be recovered without ever calling `dlsym`.
+      let handler: Callback = callback!(scope, |signum: i32| -> () {
+        unsafe{ *(addr as *mut i32) = signum; }
+      });
+
+      libc.call("signal").arg::<i32>(10 /* SIGUSR1 */).arg(handler).void()?;
+      let old: Pointer = libc.call("signal").arg::<i32>(10).arg(Pointer(0)).result()?;
+
+      // callvPointer: call the raw address directly.
+      scope.callvPointer(old, vec![Arg::from(11i32)])?;
+      let firstRead: i32 = i32::from_ne_bytes(mem.read()?.try_into().unwrap());
+      assert_eq!(firstRead, 11);
+
+      // callPointerErrno: same address, forcing errno capture even though
+      // this particular handler never touches errno — proves the flag
+      // alone doesn't break an otherwise-normal call.
+      let _: () = scope.callPointerErrno(old, vec![Arg::from(22i32)])?;
+      let secondRead: i32 = i32::from_ne_bytes(mem.read()?.try_into().unwrap());
+
+      Ok(secondRead)
+    }).expect("callPointer roundtrip failed");
+
+    assert_eq!(secondRead, 22);
   }
 
   // ===============================================================================================

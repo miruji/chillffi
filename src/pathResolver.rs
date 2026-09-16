@@ -66,6 +66,7 @@ mod tests
   use super::*;
   use std::env::temp_dir;
   use std::fs::File;
+  use crate::platform::platformExt;
   // ===============================================================================================
 
   /// Checks that paths containing a slash are ignored.
@@ -73,7 +74,7 @@ mod tests
   fn ignoresPathWithSlash() -> ()
   {
     let resolver: PathResolver = PathResolver::default();
-    assert_eq!(resolver.resolve("foo/bar.so"), None);
+    assert_eq!(resolver.resolve(platformExt!("foo/bar")), None);
   }
 
   /// Checks that None is returned when the file is not found.
@@ -82,7 +83,7 @@ mod tests
   {
     let mut resolver: PathResolver = PathResolver::default();
     resolver.addPath("/nonexistent/dir");
-    assert_eq!(resolver.resolve("libNope.so"), None);
+    assert_eq!(resolver.resolve(platformExt!("libNope")), None);
   }
 
   /// Checks finding an existing file in the registered directories.
@@ -90,7 +91,7 @@ mod tests
   fn findsExistingFile() -> ()
   {
     let dir: PathBuf = temp_dir();
-    let fileName: &str = "chillffiTestResolve.so";
+    let fileName: &str = platformExt!("chillffiTestResolve");
     File::create(dir.join(fileName)).unwrap();
 
     let mut resolver: PathResolver = PathResolver::default();
@@ -107,7 +108,7 @@ mod tests
   fn globalRoundtrip() -> ()
   {
     let dir: PathBuf = temp_dir();
-    let fileName: &str = "chillffiTestGlobal.so";
+    let fileName: &str = platformExt!("chillffiTestGlobal");
     File::create(dir.join(fileName)).unwrap();
 
     addGlobalSearchPath(&dir);

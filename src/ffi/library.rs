@@ -297,27 +297,13 @@ impl<'g> Library<'g>
   ) -> Result<T, FFIError>
   {
     let raw: Value = callById(
-      self.libraryId, 
-      &self.libraryPath, 
-      functionName, args, 
-      T::TypeTag, 
+      self.libraryId,
+      &self.libraryPath,
+      functionName, args,
+      T::TypeTag,
       readErrno
     )?;
     T::fromFfiValue(Arg(raw))
-  }
-
-  /// Fire-and-forget variant: a call without waiting for or typing the result.
-  ///
-  /// todo It should be completely hidden and not work directly
-  #[inline]
-  #[doc(hidden)]
-  pub(crate) fn __callv(
-    &self,
-    functionName: &str,
-    args: Vec<Value>
-  ) -> Result<(), FFIError>
-  {
-    self.__call::<()>(functionName, args, resolveReadErrno(None))
   }
 
   // There is no variant with `let a = call(`. Because you either expect void, or specify the type.
@@ -344,7 +330,7 @@ mod tests
   use crate::ffi;
   use crate::ffi::library::getRegistry;
   use crate::ffi::scope::Scope;
-  use crate::platform::{LibcPath, LibmPath};
+  use crate::platform::{platformExt, LibcPath, LibmPath};
   // ===============================================================================================
 
   /// Checks that `.errno()` makes a failed call's errno observable via
@@ -430,6 +416,53 @@ mod tests
     }).expect("ffi block failed");
 
     assert!(!getRegistry().read().contains_key(&id));
+  }
+
+  /// Checks that [`Library::path`] reports the resolved path a library was
+  /// loaded through — with no scope/global search path registered, a bare
+  /// name resolves to itself.
+  #[test]
+  fn path() -> ()
+  {
+    let path: String = ffi!(|scope| {
+      let libm: Library = scope.load(LibmPath)?;
+      Ok(libm.path().to_string())
+    }).expect("ffi block failed");
+
+    assert_eq!(path, LibmPath);
+  }
+
+  // ===============================================================================================
+
+  /// `scope.load` never touches the filesystem — resolution is lazy, and
+  /// `dlopen` only happens inside the clone on the first real call. Checks
+  /// that a bad path is reported there, as [`FFIError::LibraryLoadFailed`].
+  #[test]
+  fn libraryLoadFailed() -> ()
+  {
+    use crate::ffi::errors::FFIError;
+
+    let err: FFIError = ffi!(|scope| {
+      let bogus: Library = scope.load(platformExt!("libChillffiDoesNotExist9000"))?;
+      bogus.call("whatever").void()
+    }).expect_err("loading a nonexistent library should fail");
+
+    assert!(matches!(err, FFIError::LibraryLoadFailed{ .. }), "unexpected error: {err:?}");
+  }
+
+  /// The library itself loads fine — it's the symbol lookup inside it that
+  /// fails, reported as [`FFIError::SymbolNotFound`].
+  #[test]
+  fn symbolNotFound() -> ()
+  {
+    use crate::ffi::errors::FFIError;
+
+    let err: FFIError = ffi!(|scope| {
+      let libm: Library = scope.load(LibmPath)?;
+      libm.call("thisSymbolDoesNotExistAnywhere").void()
+    }).expect_err("calling a missing symbol should fail");
+
+    assert!(matches!(err, FFIError::SymbolNotFound{ .. }), "unexpected error: {err:?}");
   }
 
   // ===============================================================================================

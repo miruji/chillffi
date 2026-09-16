@@ -5,14 +5,36 @@
 // =================================================================================================
 
 #[cfg(target_os = "linux")]
+#[allow(unused_imports)]
 pub use linux::*;
+
 #[cfg(target_os = "macos")]
+#[allow(unused_imports)]
 pub use macos::*;
 
 // =================================================================================================
 
+/// Linux → ".so", macOS → ".dylib"
+/// 
+/// todo Кстати в теории он мог быть публичным хелпером,
+///  потому что такое может быть удобно при мульти-платформе в коде.
+#[allow(unused_macros)]
+macro_rules! platformExt
+{
+  ($path:literal) => {{
+    #[cfg(target_os = "macos")]
+    { concat!($path, ".dylib") }
+    #[cfg(not(target_os = "macos"))]
+    { concat!($path, ".so") }
+  }};
+}
+#[allow(unused_imports)]
+pub(crate) use platformExt;
+
+// =================================================================================================
+
 #[cfg(target_os = "linux")]
-mod linux 
+mod linux
 {
   //
   #[allow(dead_code)]
@@ -36,7 +58,7 @@ mod linux
 // =================================================================================================
 
 #[cfg(target_os = "macos")]
-mod macos 
+mod macos
 {
   //
   #[allow(dead_code)]

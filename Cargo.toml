@@ -35,7 +35,14 @@ include = [
 
 documentation = "https://docs.rs/chillffi"
 [package.metadata.docs.rs]
-targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
+targets = [
+  "x86_64-unknown-linux-gnu",
+  "aarch64-unknown-linux-gnu",
+  "x86_64-apple-darwin",
+  "aarch64-apple-darwin",
+  #"x86_64-pc-windows-msvc",
+  #"aarch64-pc-windows-msvc"
+]
 
 # ======================================================================================================================
 
@@ -65,7 +72,8 @@ incremental = true
 
 [dependencies]
 bincode = { version = "2.0.1", features = ["serde"] }
-# Used for FFI; (3.0 if anything - no).
+# Provides binary serialization format for serde, used for efficient encoding
+# and decoding of IPC messages between isolated processes.
 
 libloading = { version = "0.9.0" }
 # Used for dynamic library loading (libraryPath)
@@ -113,10 +121,6 @@ non_camel_case_types = "allow"
 
 # Usage examples:
 # cargo run --example simple
-
-[[example]]
-name = "simple"
-path = "examples/simple.rs"
 
 # ======================================================================================================================
 

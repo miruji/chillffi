@@ -670,3 +670,71 @@ fn supervisorLoop() -> ()
 }
 
 // =================================================================================================
+
+#[cfg(test)]
+mod tests
+{
+  use crate::ffi;
+  use crate::ffi::errors::FFIError;
+  use crate::platform::{platformExt, LibmPath};
+  // ===============================================================================================
+
+  /// The headline guarantee of this crate: a real SIGSEGV inside an
+  /// isolated clone must surface as `Err`, never take down the process
+  /// running this test. Uses `examples/isolation/crash.c`, built by
+  /// `build.rs` for every `cargo build`/`cargo test`, not just `cargo run
+  /// --example isolation`.
+  #[test]
+  fn segfaultIsIsolated() -> ()
+  {
+    let result: Result<(), FFIError> = ffi!(|scope| {
+      scope.addSearchPath("examples/isolation");
+      let lib: Library = scope.load(platformExt!("libcrash"))?;
+      lib.call("triggerSegfault").void()
+    });
+
+    let err: FFIError = result.expect_err("a segfaulting clone must not report success");
+    assert!(matches!(err, FFIError::ZygoteCommunicationFailed(_)), "unexpected error: {err:?}");
+  }
+
+  /// Same guarantee for `abort()` (SIGABRT) — a different signal, same boundary.
+  #[test]
+  fn abortIsIsolated() -> ()
+  {
+    let result: Result<(), FFIError> = ffi!(|scope| {
+      scope.addSearchPath("examples/isolation");
+      let lib: Library = scope.load(platformExt!("libcrash"))?;
+      lib.call("triggerAbort").void()
+    });
+
+    let err: FFIError = result.expect_err("an aborting clone must not report success");
+    assert!(matches!(err, FFIError::ZygoteCommunicationFailed(_)), "unexpected error: {err:?}");
+  }
+
+  /// A crashed clone must not affect the main zygote: a completely
+  /// unrelated `ffi!` block right after still succeeds. Each `ffi!` forks
+  /// its own fresh clone from the always-alive main zygote — a crashed
+  /// clone never touches the main zygote itself, so this needs no
+  /// supervisor-restart delay to be meaningful.
+  #[test]
+  fn runtimeSurvivesAfterCrash() -> ()
+  {
+    let crashed: Result<(), FFIError> = ffi!(|scope| {
+      scope.addSearchPath("examples/isolation");
+      let lib: Library = scope.load(platformExt!("libcrash"))?;
+      lib.call("triggerAbort").void()
+    });
+    assert!(crashed.is_err(), "sanity check: the setup call should have crashed");
+
+    let result: f64 = ffi!(|scope| {
+      let libm: Library = scope.load(LibmPath)?;
+      libm.call("sqrt").arg::<f64>(16.0).result()
+    }).expect("runtime should survive a crashed clone");
+
+    assert!((result - 4.0).abs() < f64::EPSILON);
+  }
+
+  // ===============================================================================================
+}
+
+// =================================================================================================
