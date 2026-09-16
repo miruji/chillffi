@@ -23,7 +23,7 @@ impl PrimitiveValue for Pointer
     match value
     {
       Value::Pointer(addr) => Ok(Self(addr)),
-      _ => Err(FFIError::Other(format!("expected Pointer, got {:?}", value))),
+      _ => Err(FFIError::Other(format!("expected Pointer, got {:?}", value)))
     }
   }
 
@@ -48,13 +48,19 @@ impl std::fmt::UpperHex for Pointer
 impl From<Pointer> for usize
 {
   /// Extracts the underlying `usize` memory address from a [`Pointer`].
-  fn from(p: Pointer) -> Self { p.0 }
+  fn from(p: Pointer) -> Self
+  {
+    p.0
+  }
 }
 
 impl From<Pointer> for Value
 {
   /// Converts a [`Pointer`] directly into a [`Value::Pointer`] variant.
-  fn from(p: Pointer) -> Self { Self::Pointer(p.0) }
+  fn from(p: Pointer) -> Self
+  {
+    Self::Pointer(p.0)
+  }
 }
 
 // =================================================================================================

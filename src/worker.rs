@@ -556,7 +556,7 @@ fn readStructAt(base: usize, fields: &[Type]) -> Result<Value, FFIError>
         // Recurse directly so a layout error in a nested struct field propagates 
         // as Err, instead of readArg's Value::None fallback.
         readStructAt(base + offset, nested)?,
-      _ => readArg((base + offset) as *const c_void, field),
+      _ => readArg((base + offset) as *const c_void, field)
     });
   }
   Ok(Value::Struct(values.into_boxed_slice()))
@@ -676,8 +676,8 @@ pub fn executeFFI(
 
     FFIRequest::AllocAligned { length, alignment } => {
       // posix_memalign requires alignment to be at least sizeof(void*)
-      let min_alignment: usize = size_of::<*mut c_void>();
-      let align: usize = if alignment < min_alignment { min_alignment } else { alignment };
+      let minAlignment: usize = size_of::<*mut c_void>();
+      let align: usize = if alignment < minAlignment { minAlignment } else { alignment };
 
       // alignment must be a power of 2 (and non-zero)
       if !align.is_power_of_two() {
@@ -800,7 +800,9 @@ fn executeCall(
   for (index, arg) in args.iter().enumerate() 
   {
     if matches!(arg, Value::None) {
-      return Err(FFIError::BadArgument(format!("Cannot pass Value::None as argument at index {}", index)));
+      return Err(FFIError::BadArgument(
+        format!("Cannot pass Value::None as argument at index {}", index)
+      ));
     }
   }
 
@@ -812,7 +814,10 @@ fn executeCall(
   {
     let lib: Library = unsafe{
       Library::new(&libraryPath)
-        .map_err(|e| FFIError::LibraryLoadFailed { libraryPath: libraryPath.clone(), message: e.to_string() })?
+        .map_err(|e| FFIError::LibraryLoadFailed { 
+          libraryPath: libraryPath.clone(),
+          message: e.to_string() 
+        })?
     };
     cache.insert(libraryPath.clone(), lib);
   }
@@ -823,7 +828,9 @@ fn executeCall(
     unsafe{
       *library
         .get::<*mut c_void>(functionName.as_bytes())
-        .map_err(|_| FFIError::SymbolNotFound { functionName: functionName.clone() })?
+        .map_err(|_| FFIError::SymbolNotFound { 
+          functionName: functionName.clone() 
+        })?
     };
 
   invokeAtPointer(functionPointer as usize, args, ffiResultType, readErrno)

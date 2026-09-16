@@ -36,9 +36,9 @@ pub mod __reexport
 /// Inside this crate it has exactly one instantiation that matters:
 /// `Callable<CallbackArgs, Value>` — the fully dynamic form the clone's
 /// dispatcher holds. Macro-generated code never implements it directly: the
-/// expansion runs in *foreign* crates where `Value` (`pub(crate)`) cannot
+/// expansion runs in *foreign* crates where [`Value`] (`pub(crate)`) cannot
 /// even be named; the bridge from the typed macro-generated entry point to
-/// this dynamic form is `ErasedCallable` + `StateFnAdapter`.
+/// this dynamic form is [`ErasedCallable`] + [`StateFnAdapter`].
 pub trait Callable<Args, Output>: Send
 {
   /// Executes the captured closure with the provided arguments.
@@ -85,8 +85,8 @@ pub fn decode(bytes: &[u8]) -> Result<ErasedCallable, CallError>
 /// `$scope.callback(...)` method call would accept *any* type with a
 /// same-shaped method, checked only after expansion. Routing the call
 /// through this sealed trait instead makes the macro require the bound
-/// explicitly: `IsScope` can only be implemented inside this crate (via the
-/// private `Sealed` supertrait), and only `Scope<'g>` does — so anything
+/// explicitly: [`IsScope`] can only be implemented inside this crate (via the
+/// private [`Sealed`] supertrait), and only `Scope<'g>` does — so anything
 /// else fails to compile right here, not silently "worked" by accident.
 pub mod sealed
 {
@@ -118,37 +118,22 @@ pub mod sealed
 
 /// Wraps a closure so it can cross the zygote fork.
 ///
-/// New syntax without an explicit capture list — variables from the surrounding
-/// environment are captured automatically, exactly like any ordinary Rust
-/// closure. No `serde_closure` (or any other crate) is involved: a native
-/// `move |...| { ... }` closure already captures whatever it references, all
-/// on its own, that part needs no library at all.
+/// Variables from the surrounding environment are captured automatically
+/// as a standard `move` closure. 
 ///
-/// The one real problem a library like `serde_closure` solves is different:
-/// *serializing* the resulting closure, which has an unnameable,
-/// compiler-generated type. This crate solves it more narrowly, in a way
-/// that fits the zygote architecture specifically instead of the general
-/// case: captured variables must be `Copy + Send + 'static` (so the closure
-/// itself ends up `Copy`), and the closure's captured state is transmitted
-/// as a raw bit-copy of its own memory rather than a field-by-field
-/// serialization. That is sound *because*:
-///   - `Copy` guarantees no `Drop` impl exists, so bit-duplicating it can
-///     never cause a double-free/double-drop — this is the load-bearing
-///     bound, not a convenience.
-///   - the clone is not a different program on a different machine but a
-///     fork/re-exec of this exact binary, so the concrete monomorphized
-///     `F`'s layout is byte-for-byte identical on both ends.
-/// 
-/// This means captures are restricted to plain, stack-only data (numbers,
-/// bools, pointers, `#[derive(Clone, Copy)]` structs, ...) — no `String`,
-/// `Vec`, `Box`, or anything else that owns a heap allocation. That is a
-/// real capability reduction versus the explicit-list `[]` design (which
-/// only needed `Serialize + Clone`), traded for not depending on an
-/// external capture-detecting proc-macro.
+/// **Constraints:**
+/// Captures are strictly limited to plain, stack-only data (`Copy + Send + 'static`). 
+/// Types that own heap allocations (e.g., `String`, `Vec`, `Box`) are not supported.
 ///
-/// The expansion still generates a per-call-site decode function (so the
-/// relative offset mechanism continues to work) and monomorphizes it for
-/// the concrete unnameable closure type.
+/// **Implementation Details:**
+/// The closure's captured state is transmitted as a raw bit-copy of its memory. 
+/// This is sound because:
+/// 1. The `Copy` bound guarantees no `Drop` implementation exists (preventing double-frees).
+/// 2. The target process is a fork/re-exec of this exact binary, ensuring a byte-for-byte 
+///    identical memory layout for the monomorphized closure.
+///
+/// The macro expansion generates a per-call-site decode function, maintaining 
+/// the relative offset mechanism and monomorphizing it for the concrete closure type.
 #[macro_export]
 macro_rules! callback
 {
@@ -174,15 +159,17 @@ macro_rules! callback
       // references entirely on its own — this line needs no macro help.
       let closure = move |$($argName: $argTy),*| -> $retTy { $body };
 
-      // Force monomorphization of a decode function for the exact type of
-      // `closure`. The returned function pointer is what we store as relativeOffset.
+      /// Force monomorphization of a decode function for the exact type of
+      /// `closure`. The returned function pointer is what we store as relativeOffset.
       fn forceDecode<F>() -> fn(u64, u64, &[u8]) -> ::std::result::Result<
         $crate::ffi::callback::ErasedCallable,
         $crate::ffi::callback::CallError
       >
       where
-        F: Fn($($argTy),*) -> $retTy + Copy + Send + 'static,
+        F: Fn($($argTy),*) -> $retTy + Copy + Send + 'static
       {
+        /// Validates transmission tags and reconstructs the concrete closure state `F`
+        /// from the raw byte payload. Returns an [`ErasedCallable`] ready for execution.
         fn decodeImpl<F>(
           siteTag: u64,
           argsOutputTag: u64,
@@ -192,7 +179,7 @@ macro_rules! callback
           $crate::ffi::callback::CallError
         >
         where
-          F: Fn($($argTy),*) -> $retTy + Copy + Send + 'static,
+          F: Fn($($argTy),*) -> $retTy + Copy + Send + 'static
         {
           let expectedSiteTag: u64 = $crate::ffi::callback::addressing::tagOf(
             concat!(file!(), ":", line!(), ":", column!())
@@ -217,11 +204,11 @@ macro_rules! callback
           // raw bit-copy (see `Sendable::fromClosure`) and is read back the
           // same way. Sound only because `F: Copy` (no Drop to double-run)
           // and both ends are the same compiled binary (identical layout).
-          if bytes.len() != ::std::mem::size_of::<F>() {
+          if bytes.len() != size_of::<F>() {
             return ::std::result::Result::Err(
               $crate::ffi::callback::CallError::Decode(::std::format!(
                 "callback state size mismatch: expected {} bytes, got {}",
-                ::std::mem::size_of::<F>(),
+                size_of::<F>(),
                 bytes.len()
               ))
             );
@@ -231,10 +218,10 @@ macro_rules! callback
           // makes this a valid duplicate, not a torn-out original.
           let state: F = unsafe{ ::std::ptr::read_unaligned(bytes.as_ptr().cast::<F>()) };
 
-          // Rebuild the typed entry that knows how to pull args from
-          // DynamicList and call the closure directly (`state(a, b, ...)`),
-          // no trait-object/trait-method indirection needed.
-          fn call_typed<F>(
+          /// Rebuild the typed entry that knows how to pull args from
+          /// DynamicList and call the closure directly (`state(a, b, ...)`),
+          /// no trait-object/trait-method indirection needed.
+          fn callTyped<F>(
             state: &F,
             args: &$crate::ffi::types::primitive::DynamicList
           ) -> $retTy
@@ -252,7 +239,7 @@ macro_rules! callback
           }
 
           ::std::result::Result::Ok(
-            $crate::ffi::callback::ErasedCallable::fromStateAndFn(state, call_typed::<F>)
+            $crate::ffi::callback::ErasedCallable::fromStateAndFn(state, callTyped::<F>)
           )
         }
         decodeImpl::<F>

@@ -16,12 +16,15 @@ impl PrimitiveValue for ()
     match value
     {
       Value::None => Ok(()),
-      _ => Err(FFIError::Other(format!("expected None, got {:?}", value))),
+      _ => Err(FFIError::Other(format!("expected None, got {:?}", value)))
     }
   }
 
   /// Converts a unit type `()` into a [`Value::None`].
-  fn toValue(self) -> Value { Value::None }
+  fn toValue(self) -> Value
+  {
+    Value::None
+  }
 }
 
 // =================================================================================================

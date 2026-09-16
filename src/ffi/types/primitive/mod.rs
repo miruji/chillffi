@@ -97,7 +97,7 @@ macro_rules! implFFIPrimitive
       {
         match value {
           Value::$variant(v) => Ok(v),
-          _ => Err(FFIError::Other(format!("expected {}, got {:?}", stringify!($variant), value))),
+          _ => Err(FFIError::Other(format!("expected {}, got {:?}", stringify!($variant), value)))
         }
       }
 
@@ -111,7 +111,10 @@ macro_rules! implFFIPrimitive
     impl From<$rustType> for Value
     {
       /// Converts the raw primitive into a dynamic [`Value`].
-      fn from(v: $rustType) -> Self { Value::$variant(v) }
+      fn from(v: $rustType) -> Self
+      {
+        Value::$variant(v)
+      }
     }
   };
 }

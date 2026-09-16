@@ -22,6 +22,20 @@ impl From<&str> for Value
   }
 }
 
+impl TryFrom<Value> for String
+{
+  type Error = FFIError;
+
+  /// Attempts to convert a string [`Value`] into a Rust [`String`].
+  fn try_from(value: Value) -> Result<Self, Self::Error>
+  {
+    let bytes: Vec<u8> = extractStringBytes(value)?;
+    Self::from_utf8(bytes)
+      .map_err(|e| FFIError::Other(format!("not valid UTF-8: {e}")))
+  }
+}
+
+// =================================================================================================
 
 impl From<CString> for Value 
 {
@@ -41,6 +55,21 @@ impl From<&CStr> for Value
   }
 }
 
+impl TryFrom<Value> for CString
+{
+  type Error = FFIError;
+
+  /// Attempts to convert a string [`Value`] into a [`CString`].
+  fn try_from(value: Value) -> Result<Self, Self::Error>
+  {
+    let bytes: Vec<u8> = extractStringBytes(value)?;
+    Self::from_vec_with_nul(bytes)
+      .map_err(|e| FFIError::Other(format!("invalid C string: {e}")))
+  }
+}
+
+// =================================================================================================
+
 impl From<Vec<u8>> for Value
 {
   /// Converts raw bytes `Vec<u8>` into [`Value::RawString`].
@@ -59,32 +88,6 @@ impl From<&[u8]> for Value
   }
 }
 
-impl TryFrom<Value> for String
-{
-  type Error = FFIError;
-
-  /// Attempts to convert a string [`Value`] into a Rust [`String`].
-  fn try_from(value: Value) -> Result<Self, Self::Error>
-  {
-    let bytes: Vec<u8> = extractStringBytes(value)?;
-    Self::from_utf8(bytes)
-      .map_err(|e| FFIError::Other(format!("not valid UTF-8: {e}")))
-  }
-}
-
-impl TryFrom<Value> for CString
-{
-  type Error = FFIError;
-
-  /// Attempts to convert a string [`Value`] into a [`CString`].
-  fn try_from(value: Value) -> Result<Self, Self::Error>
-  {
-    let bytes: Vec<u8> = extractStringBytes(value)?;
-    Self::from_vec_with_nul(bytes)
-      .map_err(|e| FFIError::Other(format!("invalid C string: {e}")))
-  }
-}
-
 impl TryFrom<Value> for Vec<u8>
 {
   type Error = FFIError;
@@ -95,6 +98,8 @@ impl TryFrom<Value> for Vec<u8>
     extractStringBytes(value)
   }
 }
+
+// =================================================================================================
 
 /// Helper function to extract raw byte vector from any string [`Value`] variant.
 fn extractStringBytes(value: Value) -> Result<Vec<u8>, FFIError>

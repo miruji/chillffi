@@ -40,10 +40,6 @@ pub fn tagOf(sourceLocation: &str) -> u64
 /// sender in [`Sendable::encode`], the receiver inside the macro-generated
 /// decode function — so an Args/Output mismatch is caught before the
 /// captured state is deserialized.
-///
-/// Replaces the old `argsOutputTagOf::<Args, Output>()` (it hashed
-/// `type_name`s of generic parameters that no longer exist at the decode
-/// site now that `decode` is type-erased).
 #[doc(hidden)]
 pub fn typesTagOf(argTypes: &[Type], returnType: &Type) -> u64
 {

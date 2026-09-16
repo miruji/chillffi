@@ -39,22 +39,24 @@ impl Sendable
   ///
   /// `F: Copy` is load-bearing, not a convenience bound: what follows is a
   /// raw bit-copy of `closure`'s memory, not a field-by-field serialization.
+  /// 
   /// That is only sound because `Copy` guarantees `F` has no `Drop` impl —
   /// duplicating its bytes can never run a destructor twice or leave one
-  /// side pointing at memory the other side already freed. It also means
-  /// captures are limited to plain, heap-free data (numbers, bools,
-  /// pointers, `#[derive(Clone, Copy)]` structs, ...) — a `String` or `Vec`
-  /// capture will fail to compile here, not corrupt memory at runtime.
+  /// side pointing at memory the other side already freed.
+  /// 
+  /// It also means captures are limited to plain, heap-free data (numbers, 
+  /// bools, pointers, `#[derive(Clone, Copy)]` structs, ...) — a `String` 
+  /// or `Vec` capture will fail to compile here, not corrupt memory at runtime.
   #[doc(hidden)]
   pub fn fromClosure<F>(
     closure: F,
     relativeOffset: usize,
     siteTag: u64,
     argTypes: Vec<Type>,
-    returnType: Type,
+    returnType: Type
   ) -> Self
   where
-    F: Copy + Send + 'static,
+    F: Copy + Send + 'static
   {
     // Safety: `closure` is `Copy`, so it has no `Drop` impl — reading its
     // representation out as bytes and letting the original also drop
@@ -62,13 +64,12 @@ impl Sendable
     // reconstructs `F` from these same bytes (see the `callback!` macro),
     // which is valid because it is the identical compiled type, not a
     // foreign/portable format.
-    let state: Vec<u8> = unsafe
-      {
-        std::slice::from_raw_parts(
-          (&closure as *const F).cast::<u8>(),
-          std::mem::size_of::<F>()
-        )
-      }.to_vec();
+    let state: Vec<u8> = unsafe{
+      std::slice::from_raw_parts(
+        (&closure as *const F).cast::<u8>(),
+        size_of::<F>()
+      )
+    }.to_vec();
 
     Self {
       relativeOffset,

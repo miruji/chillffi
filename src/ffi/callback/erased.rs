@@ -7,10 +7,6 @@ use crate::ffi::types::primitive::FfiPrimitive;
 
 /// The type-erased, dynamically callable form of a [`callback!`] closure —
 /// what [`decode`] reconstructs inside the clone.
-///
-/// This is the public boundary of the otherwise `pub(crate)` dynamic world:
-/// its constructor takes only nameable types, so macro-generated code in
-/// foreign crates can build it, while actually *invoking* it stays crate-internal.
 pub struct ErasedCallable
 {
   /// Type-erased callable implementation.
@@ -22,9 +18,9 @@ impl ErasedCallable
   /// Wraps a reconstructed closure (or any state + typed entry point pair)
   /// into the erased, dispatcher-facing callable.
   ///
-  /// This is the only constructor `ErasedCallable` needs: a bit-copied
-  /// native closure is just "some `State` plus a way to call it", exactly
-  /// like any other `State` the macro could hand in, so there is no
+  /// This is the only constructor [`ErasedCallable`] needs: a bit-copied
+  /// native closure is just "some [`State`] plus a way to call it", exactly
+  /// like any other [`State`] the macro could hand in, so there is no
   /// separate closure-specific path to maintain.
   #[doc(hidden)]
   pub fn fromStateAndFn<State: Send + 'static, Output: FfiPrimitive + 'static>(
@@ -39,8 +35,6 @@ impl ErasedCallable
 
   /// Invokes the erased closure with dynamic arguments and returns the
   /// dynamic result.
-  ///
-  /// `pub(crate)`: only this crate's dispatcher (running inside the clone).
   pub(crate) fn call(&self, args: DynamicList) -> Value
   {
     self.inner.call(args)
@@ -55,7 +49,7 @@ impl ErasedCallable
 /// The only place where the two worlds meet.
 struct StateFnAdapter<State: Send + 'static, Output: Primitive + 'static>
 {
-  /// Captured closure state (reconstructed by bit-copy — see `callback!`).
+  /// Captured closure state (reconstructed by bit-copy — see [`callback!`]).
   state: State,
 
   /// Typed function entry point.
@@ -65,6 +59,7 @@ struct StateFnAdapter<State: Send + 'static, Output: Primitive + 'static>
 impl<State: Send + 'static, Output: FfiPrimitive + 'static>
 Callable<DynamicList, Value> for StateFnAdapter<State, Output>
 {
+  /// todo desc
   fn call(&self, args: DynamicList) -> Value
   {
     (self.typedFn)(&self.state, &args).toFfiValue().0

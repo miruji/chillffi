@@ -161,7 +161,7 @@ impl<'g> Scope<'g>
     // Memory allocation through zigot
     match sendRawRequest(FFIRequest::Alloc { length })? {
       Value::Pointer(address) => Ok(AllocatedMemory::new(address, length)),
-      _ => Err(FFIError::Other("Alloc did not return a pointer".to_string())),
+      _ => Err(FFIError::Other("Alloc did not return a pointer".to_string()))
     }
   }
 
@@ -190,9 +190,9 @@ impl<'g> Scope<'g>
     match sendRawRequest(FFIRequest::AllocDynamicStruct { fields: fields.to_vec() })? {
       Value::Struct(parts) if parts.len() == 2 => match (&parts[0], &parts[1]) {
         (Value::Pointer(address), Value::Usize(size)) => Ok(AllocatedMemory::new(*address, *size)),
-        _ => Err(FFIError::Other("AllocDynamicStruct returned an unexpected shape".to_string())),
+        _ => Err(FFIError::Other("AllocDynamicStruct returned an unexpected shape".to_string()))
       },
-      _ => Err(FFIError::Other("AllocDynamicStruct did not return a pointer+size pair".to_string())),
+      _ => Err(FFIError::Other("AllocDynamicStruct did not return a pointer+size pair".to_string()))
     }
   }
 
@@ -218,7 +218,7 @@ impl<'g> Scope<'g>
     // Memory allocation through zygote with alignment
     match sendRawRequest(FFIRequest::AllocAligned { length, alignment })? {
       Value::Pointer(address) => Ok(AllocatedMemory::new(address, length)),
-      _ => Err(FFIError::Other("AllocAligned did not return a pointer".to_string())),
+      _ => Err(FFIError::Other("AllocAligned did not return a pointer".to_string()))
     }
   }
 
@@ -238,7 +238,7 @@ impl<'g> Scope<'g>
   {
     let value: Value = sendRawRequest(FFIRequest::ReadMemory {
       pointer: pointer.into(),
-      length,
+      length
     })?;
     value.try_into()
   }
@@ -248,7 +248,7 @@ impl<'g> Scope<'g>
   {
     sendRawRequest(FFIRequest::WriteMemory {
       pointer: pointer.into(),
-      value: value.intoFfiValue().0,
+      value: value.intoFfiValue().0
     })?;
     Ok(())
   }
@@ -259,18 +259,18 @@ impl<'g> Scope<'g>
   /// and returns it as a `DynamicStruct`.
   pub fn readDynamicStruct(
     pointer: impl Into<usize>,
-    fields: &[Type],
+    fields: &[Type]
   ) -> Result<DynamicList, FFIError>
   {
     match sendRawRequest(FFIRequest::ReadDynamicStruct {
       pointer: pointer.into(),
-      fields: fields.to_vec(),
+      fields: fields.to_vec()
     })? {
       Value::Struct(values) => Ok(DynamicList::fromValues(values)),
       other => Err(FFIError::Other(format!(
         "ReadDynamicStruct: expected Value::Struct, got {:?}",
         other
-      ))),
+      )))
     }
   }
 
@@ -283,7 +283,9 @@ impl<'g> Scope<'g>
   {
     let values: Vec<Value> = values.into_iter().map(|a: Arg| a.0).collect();
     sendRawRequest(FFIRequest::WriteDynamicStruct {
-      pointer: pointer.into(), fields: fields.to_vec(), values
+      pointer: pointer.into(), 
+      fields: fields.to_vec(), 
+      values
     })?;
     Ok(())
   }
@@ -339,7 +341,9 @@ impl<'g> Scope<'g>
     readErrno: Option<bool>
   ) -> Result<T, FFIError>
   {
-    let readErrno: bool = readErrno.unwrap_or_else(|| currentScopeReadErrno().unwrap_or_else(globalReadErrno));
+    let readErrno: bool = readErrno.unwrap_or_else(
+      || currentScopeReadErrno().unwrap_or_else(globalReadErrno)
+    );
     let args: Vec<Value> = args.into_iter().map(|a: Arg| a.0).collect();
     let raw: Value = sendRawRequest(FFIRequest::CallPointer {
       pointer: pointer.into(),
@@ -388,7 +392,11 @@ impl<'g> Scope<'g>
 
 impl<'g> Drop for Scope<'g>
 {
-  fn drop(&mut self) -> () { ScopeStack.with(|s| { s.borrow_mut().pop(); }); }
+  /// todo desc
+  fn drop(&mut self) -> ()
+  {
+    ScopeStack.with(|s| { s.borrow_mut().pop() });
+  }
 }
 
 // =================================================================================================
@@ -437,10 +445,10 @@ impl FFIScope
     Ok(Self { _zygote, guard })
   }
 
-  /// Borrows a [`Scope`] handle tied to this `FFIScope`'s lifetime.
+  /// Borrows a [`Scope`] handle tied to this [`FFIScope`]'s lifetime.
   ///
   /// All [`AllocatedMemory<'g>`] / [`Library<'g>`] values obtained through this
-  /// handle are freed (via their own `Drop`) no later than when this `FFIScope`
+  /// handle are freed (via their own `Drop`) no later than when this [`FFIScope`]
   /// is dropped — the compiler enforces that statically through `'g`.
   pub fn scope(&self) -> Scope<'_>
   {
@@ -738,7 +746,7 @@ mod tests
     let result: Pointer = ffi!(|scope| {
       scope.addSearchPath(&scopeDir);
       let lib: Library = scope.load(libName)?;
-      lib.call("print").arg("priority test\n").result() // todo Она выходит за test
+      lib.call("print").arg("priority test\n").result() // todo It goes outside the test bounds
     }).expect("scope path should have taken priority over the global one");
 
     assert!(matches!(result, Pointer(0)));

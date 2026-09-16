@@ -15,9 +15,9 @@ pub use macos::*;
 // =================================================================================================
 
 /// Linux → ".so", macOS → ".dylib"
-/// 
-/// todo Кстати в теории он мог быть публичным хелпером,
-///  потому что такое может быть удобно при мульти-платформе в коде.
+///
+/// todo By the way, in theory it could have been a public helper,
+///  because something like this can be convenient in multi-platform code.
 #[allow(unused_macros)]
 macro_rules! platformExt
 {
