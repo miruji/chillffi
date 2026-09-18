@@ -15,6 +15,10 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::OnceLock;
 use std::thread;
+#[cfg(windows)]
+use bincode::config::Configuration;
+#[cfg(windows)]
+use crate::sys::{Handle, ProcessId};
 // =================================================================================================
 
 /* todo
@@ -155,16 +159,21 @@ enum ZygoteCommand
 #[derive(Serialize, Deserialize)]
 enum ZygoteReply
 {
-  /// Clone is ready.
-  ///
-  /// - `requestTx` — Runtime sends [`FFIRequest`] to the clone
-  /// - `responseRx` — Runtime receives [`FFIResponse`] from the clone
+  /// Clone is ready (Unix / macOS): transferable ipc-channel ends.
+  #[cfg(unix)]
   Clone {
     pid: u32,
     requestTx: IpcSender<FFIRequest>,
     responseRx: IpcReceiver<FFIResponse>
   },
-  /// `ipc::channel()` or `fork()` failed inside Main Zygote.
+  /// Clone is ready (Windows): named-pipe *names* only — no handle OOB.
+  /// Runtime connects with CreateFile; clone already listens.
+  #[cfg(windows)]
+  Clone {
+    pid: u32,
+    dataPipe: String
+  },
+  /// `ipc::channel()` or `fork()`/`RtlCloneUserProcess` failed inside Main Zygote.
   SpawnFailed
 }
 
@@ -179,11 +188,22 @@ struct BootstrapToRuntime
 
 /// First message from a freshly forked clone → Main Zygote (post-fork channel setup).
 /// Carries the ends that Runtime will use; clone keeps the opposite ends locally.
+///
+/// Unix: real transferable ipc-channel ends.
+/// Windows: only pipe names (handles cannot cross RtlCloneUserProcess via ipc-channel).
+#[cfg(unix)]
 #[derive(Serialize, Deserialize)]
 struct CloneBootstrap
 {
   requestTx: IpcSender<FFIRequest>,
   responseRx: IpcReceiver<FFIResponse>
+}
+
+#[cfg(windows)]
+#[derive(Serialize, Deserialize)]
+struct CloneBootstrap
+{
+  dataPipe: String
 }
 
 // =================================================================================================
@@ -218,10 +238,17 @@ pub struct ClonedZygote
 {
   /// Process PID.
   pub pid: u32,
-  /// Sends FFI requests to the clone.
+  
+  /// todo desc
+  #[cfg(unix)]
   requestTx: IpcSender<FFIRequest>,
-  /// Receives FFI responses from the clone.
-  responseRx: IpcReceiver<FFIResponse>
+  /// todo desc
+  #[cfg(unix)]
+  responseRx: IpcReceiver<FFIResponse>,
+  
+  /// Windows: one duplex named-pipe for request/response framing.
+  #[cfg(windows)]
+  dataPipe: Handle
 }
 
 impl ClonedZygote
@@ -255,14 +282,13 @@ impl ClonedZygote
 
     match reply
     {
+      #[cfg(unix)]
       ZygoteReply::Clone {
         pid,
         requestTx,
         responseRx
       } =>
       {
-        // 0 — explicit failure signal (should not appear if SpawnFailed is used,
-        // but keep the guard for protocol robustness).
         if pid == 0
         {
           return Err(
@@ -275,6 +301,26 @@ impl ClonedZygote
           responseRx
         })
       }
+      #[cfg(windows)]
+      ZygoteReply::Clone {
+        pid,
+        dataPipe
+      } =>
+      {
+        if pid == 0
+        {
+          return Err(
+            io::Error::other("Main zygote failed to create a clone (pid=0)")
+          );
+        }
+        let h: Handle = sys::connectPipeClient(&dataPipe).ok_or_else(|| {
+          io::Error::other("connect data pipe failed")
+        })?;
+        Ok(Self {
+          pid,
+          dataPipe: h
+        })
+      }
       ZygoteReply::SpawnFailed => Err(
         io::Error::other("Main zygote failed to create a clone (channel/fork failed)")
       )
@@ -285,15 +331,45 @@ impl ClonedZygote
   /// FFI call inside a specific clone.
   pub(super) fn call(&self, request: FFIRequest) -> Result<FFIResponse, String>
   {
-    self
-      .requestTx
-      .send(request)
-      .map_err(|e| format!("Zygote clone IPC failed while sending request: {e}"))?;
+    #[cfg(unix)]
+    {
+      self
+        .requestTx
+        .send(request)
+        .map_err(|e| format!("Zygote clone IPC failed while sending request: {e}"))?;
 
-    self
-      .responseRx
-      .recv()
-      .map_err(|e| format!("Zygote clone IPC failed while reading response: {e}"))
+      self
+        .responseRx
+        .recv()
+        .map_err(|e| format!("Zygote clone IPC failed while reading response: {e}"))
+    }
+    #[cfg(windows)]
+    {
+      // todo desc
+      let config: Configuration = bincode::config::standard();
+      let bytes: Vec<u8> = bincode::serde::encode_to_vec(&request, config)
+        .map_err(|e| format!("serialize FFIRequest: {e}"))?;
+      
+      // todo desc
+      if !sys::pipeSend(self.dataPipe, &bytes) {
+        return Err(
+          "Zygote clone IPC failed while sending request: pipe write failed".into()
+        );
+      }
+      
+      // todo desc
+      let responseBytes: Vec<u8> = sys::pipeRecv(self.dataPipe).ok_or_else(|| {
+        format!(
+          "Zygote clone IPC failed while reading response: pipe read failed (GetLastError={})",
+          sys::lastPipeError()
+        )
+      })?;
+      
+      // todo desc
+      let (resp, _) = bincode::serde::decode_from_slice(&responseBytes, config)
+        .map_err(|e| format!("deserialize FFIResponse: {e}"))?;
+      Ok(resp)
+    }
   }
 }
 
@@ -304,6 +380,10 @@ impl Drop for ClonedZygote
   fn drop(&mut self) -> ()
   {
     sys::killProcess(self.pid);
+    #[cfg(windows)]
+    {
+      sys::closeHandle(self.dataPipe);
+    }
   }
 }
 
@@ -438,15 +518,23 @@ fn zygoteLoop(serverName: String) -> !
   // and with SIG_IGN it will fail with ECHILD and enter guaranteed CPU load.
   sys::ignoreChildExits(); // no-op on Windows: no SIGCHLD, no zombies
 
+  // Resolve the ntdll CSR data block [CsrServerApiRoutine .. RtlpEnvironLookupTable)
+  // and kernelbase!CtrlRoutine once, in the healthy zygote, BEFORE any clone is
+  // spawned. Children inherit the cached addresses via CoW and use them in
+  // `reconnectCsr()` to zero the stale block, call CsrClientConnectToServer for
+  // BASESRV + USERSRV, and RtlRegisterThreadWithCsrss. No-op on Unix.
+  #[cfg(windows)]
+  sys::resolveCsrPortHandle();
+
   // Control channels: Runtime holds commandTx + replyRx;
   // Main Zygote holds commandRx + replyTx.
-  let (commandTx, commandRx): (IpcSender<ZygoteCommand>, IpcReceiver<ZygoteCommand>) = 
+  let (commandTx, commandRx): (IpcSender<ZygoteCommand>, IpcReceiver<ZygoteCommand>) =
     match ipc::channel::<ZygoteCommand>()
     {
       Ok(p) => p,
       Err(_) => std::process::exit(1)
     };
-  let (replyTx, replyRx): (IpcSender<ZygoteReply>, IpcReceiver<ZygoteReply>) = 
+  let (replyTx, replyRx): (IpcSender<ZygoteReply>, IpcReceiver<ZygoteReply>) =
     match ipc::channel::<ZygoteReply>()
     {
       Ok(p) => p,
@@ -485,15 +573,11 @@ fn zygoteLoop(serverName: String) -> !
     {
       ZygoteCommand::SpawnClone =>
       {
-        // IMPORTANT (macOS / Mach ports):
-        // Do NOT create data channels before fork(). Mach port rights are not
-        // safely inherited across fork — Runtime then gets "Bogus destination port"
-        // on the first send. Pattern used by ipc-channel itself:
-        //   1. Parent creates a one-shot server (bootstrap name only).
-        //   2. fork().
-        //   3. Child creates channels AFTER fork, connects to the one-shot,
-        //      sends Runtime-facing ends to the parent.
-        //   4. Parent accept()s them and forwards to Runtime via ZygoteReply.
+        // Parent creates a one-shot server; only the *name* crosses to the child.
+        // Data path is established AFTER fork/clone:
+        //   Unix  — ipc-channel ends created in child, sent over one-shot
+        //   Windows — named pipes by name (ipc-channel handle OOB breaks under
+        //             RtlCloneUserProcess)
         let (cloneServer, cloneServerName): (
           IpcOneShotServer<CloneBootstrap>,
           String
@@ -507,18 +591,12 @@ fn zygoteLoop(serverName: String) -> !
           }
         };
 
-        // Fork the main zygote for a Unix clone; on Windows there is no
-        // fork, so spawn a fresh process running this same executable.
         #[cfg(unix)]
-        let spawned: Option<u32> = match unsafe{ libc::fork() }
+        let spawned: Option<u32> = match unsafe { libc::fork() }
         {
           -1 => None,
           0 =>
           {
-            // macOS / Mach ports: the child inherits ipc-channel ends
-            // (cloneServer, commandRx, replyTx) whose port names are
-            // already invalid in this task. Dropping them panics inside
-            // ipc-channel — forget instead, then rebuild channels fresh.
             std::mem::forget(cloneServer);
             std::mem::forget(commandRx);
             std::mem::forget(replyTx);
@@ -528,18 +606,46 @@ fn zygoteLoop(serverName: String) -> !
         };
 
         #[cfg(windows)]
-        let spawned: Option<u32> = match env::current_exe()
-          .and_then(|currentExe| {
-            Command::new(currentExe)
-              .arg(CloneFlag)
-              .arg(&cloneServerName)
-              .stdin(Stdio::null())
-              .stdout(Stdio::inherit())
-              .stderr(Stdio::inherit())
-              .spawn()
-          })
+        let spawned: Option<u32> = match sys::cloneProcess()
         {
-          Ok(child) => Some(child.id()),
+          Ok(result) =>
+          {
+            let pid: ProcessId = result.pid;
+            // Thread already running (no CREATE_SUSPENDED).
+            sys::closeCloneHandles(&result);
+            Some(pid)
+          }
+          Err(sys::StatusProcessCloned) =>
+          {
+            std::mem::forget(cloneServer);
+            std::mem::forget(commandRx);
+            std::mem::forget(replyTx);
+            
+            // We are the clone. The inherited ntdll CSR data block
+            // (CsrPortHandle, CsrInitOnceDone, CsrPortHeap, CsrHeap, ...)
+            // references the parent's CSR_PROCESS on the csrss.exe side.
+            // Any Win32/basesrv call (reattachConsole, _stat64 in
+            // handleRequest, etc.) AVs and we die with ERROR_BROKEN_PIPE
+            // (109) on the data pipe. reconnectCsr() zeroes the whole
+            // block, calls CsrClientConnectToServer for BASESRV + USERSRV
+            // against \Sessions\{sid}\Windows, and registers the current
+            // thread with RtlRegisterThreadWithCsrss. Best-effort: if
+            // symbols were never resolved, we proceed anyway — same
+            // failure mode as before this fix.
+            let csrOk: bool = sys::reconnectCsr();
+            eprintln!("[child] reconnectCsr={}", csrOk);
+            
+            // reattachConsole goes through Win32 → CSRSS. If CSR was
+            // not reconnected (ARM64 without a resolved block), the
+            // stale ALPC port makes FreeConsole/AttachConsole hang —
+            // the clone never reaches cloneBootstrapLoop, and the
+            // parent blocks forever on cloneServer.accept().
+            if csrOk {
+              sys::reattachConsole();
+            }
+            sys::silenceCrashReporting();
+            cloneBootstrapLoop(cloneServerName)
+          }
           Err(_) => None
         };
 
@@ -562,12 +668,17 @@ fn zygoteLoop(serverName: String) -> !
             }
           };
 
+        #[cfg(unix)]
         let _ = replyTx.send(ZygoteReply::Clone {
           pid,
           requestTx: bootstrap.requestTx,
           responseRx: bootstrap.responseRx
         });
-        //
+        #[cfg(windows)]
+        let _ = replyTx.send(ZygoteReply::Clone {
+          pid,
+          dataPipe: bootstrap.dataPipe
+        });
       }
     }
     //
@@ -576,47 +687,82 @@ fn zygoteLoop(serverName: String) -> !
 
 // =================================================================================================
 
-/// Tail of clone startup, shared by a forked clone and a spawned one: build
-/// both data channels inside the clone, connect back to the one-shot server
-/// the main zygote is waiting on, hand over the Runtime-facing ends, serve.
+/// todo desc
 fn cloneBootstrapLoop(serverName: String) -> !
 {
-  let (requestTx, requestRx): (IpcSender<FFIRequest>, IpcReceiver<FFIRequest>) =
-    match ipc::channel::<FFIRequest>()
+  #[cfg(unix)]
+  {
+    let (requestTx, requestRx): (IpcSender<FFIRequest>, IpcReceiver<FFIRequest>) =
+      match ipc::channel::<FFIRequest>()
+      {
+        Ok(p) => p,
+        Err(_) => std::process::exit(1)
+      };
+    let (responseTx, responseRx): (IpcSender<FFIResponse>, IpcReceiver<FFIResponse>) =
+      match ipc::channel::<FFIResponse>()
+      {
+        Ok(p) => p,
+        Err(_) => std::process::exit(1)
+      };
+
+    let bootstrapTx: IpcSender<CloneBootstrap> = match IpcSender::connect(serverName)
     {
-      Ok(p) => p,
-      Err(_) => std::process::exit(1)
-    };
-  let (responseTx, responseRx): (IpcSender<FFIResponse>, IpcReceiver<FFIResponse>) =
-    match ipc::channel::<FFIResponse>()
-    {
-      Ok(p) => p,
+      Ok(tx) => tx,
       Err(_) => std::process::exit(1)
     };
 
-  let bootstrapTx: IpcSender<CloneBootstrap> = match IpcSender::connect(serverName)
-  {
-    Ok(tx) => tx,
-    Err(_) => std::process::exit(1)
-  };
+    if bootstrapTx
+      .send(CloneBootstrap {
+        requestTx,
+        responseRx
+      })
+      .is_err()
+    {
+      std::process::exit(1);
+    }
+    drop(bootstrapTx);
 
-  if bootstrapTx
-    .send(CloneBootstrap {
-      requestTx,
-      responseRx
-    })
-    .is_err()
-  {
-    std::process::exit(1);
+    cloneLoop(requestRx, responseTx);
   }
-  drop(bootstrapTx);
 
-  cloneLoop(requestRx, responseTx);
+  #[cfg(windows)]
+  {
+    let myPid: u32 = sys::currentProcessId();
+    let pipeName: String = sys::cloneDataPipeName(myPid);
+
+    // Create the duplex server BEFORE advertising the name.
+    let dataPipe: Handle = match sys::createPipeServer(&pipeName)
+    {
+      Some(h) => h,
+      None => std::process::exit(1)
+    };
+
+    let bootstrapTx: IpcSender<CloneBootstrap> = match IpcSender::connect(serverName)
+    {
+      Ok(tx) => tx,
+      Err(_) => std::process::exit(1)
+    };
+    if bootstrapTx
+      .send(CloneBootstrap {
+        dataPipe: pipeName
+      })
+      .is_err()
+    {
+      std::process::exit(1);
+    }
+    drop(bootstrapTx);
+
+    // Block until Runtime connects.
+    if !sys::acceptPipeClient(dataPipe)
+    {
+      std::process::exit(1);
+    }
+
+    cloneLoopWindows(dataPipe);
+  }
 }
 
-/// Entry point of a clone process on platforms without `fork`. Reached from
-/// the ctor in `lib.rs` when `argv[1]` is [`CloneFlag`], with `argv[2]`
-/// naming the [`IpcOneShotServer`] the main zygote is waiting on.
+/// Legacy Command-based clone entry (kept for compatibility).
 #[cfg(windows)]
 pub fn runAsClone() -> !
 {
@@ -630,28 +776,22 @@ pub fn runAsClone() -> !
 
 // =================================================================================================
 
-/// Personal clone loop.
-///
-/// Waits for [`FFIRequest`] from Runtime, runs the operation, sends [`FFIResponse`].
+/// todo desc
+#[cfg(unix)]
 fn cloneLoop(requestRx: IpcReceiver<FFIRequest>, responseTx: IpcSender<FFIResponse>) -> !
 {
-  // Local cache for dynamically loaded libraries to avoid costly repeated dlopen calls.
   let mut libraryCache: FxHashMap<String, Library> = FxHashMap::default();
 
   loop
   {
-    // Wait for and read the incoming FFI request from the main runtime.
     let request: FFIRequest = match requestRx.recv()
     {
       Ok(r) => r,
-      // Channel dropped — Runtime closed the clone handle / process exiting.
       Err(_) => std::process::exit(0)
     };
 
-    // Execute the requested FFI operation using the cache and prepare the response.
     let response: FFIResponse = handleRequest(request, &mut libraryCache);
 
-    // Transmit the execution result or error back to the parent process via IPC.
     if responseTx.send(response).is_err()
     {
       std::process::exit(0);
@@ -659,9 +799,56 @@ fn cloneLoop(requestRx: IpcReceiver<FFIRequest>, responseTx: IpcSender<FFIRespon
   }
 }
 
-/// Handles an incoming request and performs an FFI operation using the library cache.
-///
-/// Returns the execution result or an error description.
+/// todo desc
+#[cfg(windows)]
+fn cloneLoopWindows(dataPipe: Handle) -> !
+{
+  // todo desc
+  let mut libraryCache: FxHashMap<String, Library> = FxHashMap::default();
+  let cfg: Configuration = bincode::config::standard();
+
+  // todo desc
+  loop
+  {
+    // todo desc
+    let bytes: Vec<u8> = match sys::pipeRecv(dataPipe)
+    {
+      Some(b) => b,
+      None => std::process::exit(0)
+    };
+    let (request, _): (FFIRequest, usize) = match bincode::serde::decode_from_slice(&bytes, cfg)
+    {
+      Ok(v) => v,
+      Err(_) => std::process::exit(1)
+    };
+
+    // catch_unwind: a panic inside the clone must not abort the process
+    // (ERROR_BROKEN_PIPE on the Runtime side). Convert to FFIResponse::Err.
+    // Note: true AVs / SEH still kill the process — that is intentional isolation.
+    let response: FFIResponse = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+      handleRequest(request, &mut libraryCache)
+    }))
+    {
+      Ok(r) => r,
+      Err(_) => FFIResponse::Err(FFIError::Other("clone panicked while handling request".into()))
+    };
+
+    // todo desc
+    let out = match bincode::serde::encode_to_vec(&response, cfg)
+    {
+      Ok(v) => v,
+      Err(_) => std::process::exit(1)
+    };
+    if !sys::pipeSend(dataPipe, &out)
+    {
+      std::process::exit(0);
+    }
+  }
+}
+
+// =================================================================================================
+
+/// todo desc
 fn handleRequest(
   request: FFIRequest,
   cache: &mut FxHashMap<String, Library>
