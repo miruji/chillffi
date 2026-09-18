@@ -1,5 +1,11 @@
 #include <stdlib.h>
 
+#ifdef _WIN32
+  #define CHILLFFI_EXPORT __declspec(dllexport)
+#else
+  #define CHILLFFI_EXPORT
+#endif
+
 // A C function that takes a
 // pointer to a struct built by the caller.
 
@@ -10,7 +16,7 @@ struct Data {
 
 static int lastSum = 0;
 
-void process(struct Data *data) {
+CHILLFFI_EXPORT void process(struct Data *data) {
   int sum = 0;
   for (int i = 0; i < data->size; i++) {
     sum += data->values[i];
@@ -18,6 +24,6 @@ void process(struct Data *data) {
   lastSum = sum;
 }
 
-int getSum(void) {
+CHILLFFI_EXPORT int getSum(void) {
   return lastSum;
 }

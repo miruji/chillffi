@@ -1,10 +1,16 @@
 //! **A simple isolated dynamic FFI framework for Rust.**
 //!
-//! `chillffi` allows dynamically loading **C ABI-compatible libraries** 
+//! `chillffi` allows dynamically loading **C ABI-compatible libraries** (`.so`, `.dylib`, `.dll`)
 //! and calling their functions at runtime, **isolating each FFI call in a separate process**.
 //! If third-party native code crashes or corrupts memory, 
 //! the failure is contained within the isolated process, 
 //! keeping your main Rust application running.
+//!
+//! # Platform support
+//!
+//! Unix-like OSes and Windows (MSVC toolchain — `libffi-sys` has no `gnu` build).
+//! On Unix a clone is a `fork` of the main zygote; on Windows it's a fresh
+//! process re-running the same executable, since there is no `fork`.
 //!
 //! # Quick start
 //!
@@ -155,6 +161,7 @@ mod platform
 
 // =================================================================================================
 
+mod sys;
 mod worker;
 mod zygote;
 pub mod ffi;
@@ -164,6 +171,8 @@ pub mod errnoPolicy;
 // =================================================================================================
 
 use std::{env};
+#[cfg(windows)]
+use crate::zygote::{runAsClone, CloneFlag};
 use crate::zygote::{initZygote, runAsZygote, ZygoteFlag};
 
 // =================================================================================================
@@ -181,6 +190,12 @@ fn zygoteEntrypoint() -> ()
     if arg == ZygoteFlag
     {
       runAsZygote();
+    }
+
+    #[cfg(windows)]
+    if arg == CloneFlag
+    {
+      runAsClone();
     }
   }
 

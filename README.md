@@ -51,7 +51,8 @@ Add the dependency to `Cargo.toml`. There are no separate configuration flags.
 |----------------------|---------------------------------------------------------|
 | Linux                | ✅                                                       |
 | macOS                | ✅                                                       |
-| Windows              | ⏳                                                       |
+| Windows (MSVC)       | ✅                                                       |
+| Windows (GNU)        | ❌ `libffi-sys` has no vendored build for this toolchain |
 | WASM                 | ⏳ [#43](https://github.com/rts-lang/chillffi/issues/43) |
 | Bare metal           | ⏳ [#44](https://github.com/rts-lang/chillffi/issues/44) |
 | Build as `cdylib`    | ❌                                                       |

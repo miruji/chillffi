@@ -22,7 +22,7 @@ autobenches = false
 
 repository = "https://github.com/rts-lang/chillffi"
 keywords = ["ffi", "zygote", "ipc", "sandbox", "fork"]
-categories = ["external-ffi-bindings", "os::unix-apis", "api-bindings"]
+categories = ["external-ffi-bindings", "os::unix-apis", "os::windows-apis", "api-bindings"]
 publish = true
 
 include = [
@@ -39,8 +39,8 @@ targets = [
   "aarch64-unknown-linux-gnu",
   "x86_64-apple-darwin",
   "aarch64-apple-darwin",
-  #"x86_64-pc-windows-msvc",
-  #"aarch64-pc-windows-msvc"
+  "x86_64-pc-windows-msvc",
+  "aarch64-pc-windows-msvc"
 ]
 
 # ======================================================================================================================
@@ -69,6 +69,12 @@ incremental = true
 
 # ======================================================================================================================
 
+[target.'cfg(windows)'.build-dependencies]
+cc = "1.2"
+# Locates cl.exe/link.exe on Windows for build.rs; unused elsewhere.
+
+# ======================================================================================================================
+
 [dependencies]
 bincode = { version = "2.0.1", features = ["serde"] }
 # Provides binary serialization format for serde, used for efficient encoding
@@ -85,8 +91,9 @@ libffi = { version = "5.2.0" }
 # a call on the fly based on a type description, which is good for FFI.
 
 libc = { version = "1.0.0-alpha.4" }
-# Provides the dup2/dup system calls for temporary
-# redirection of stdout → stderr, isolating the library output from the service channel.
+# Process control (fork/kill/waitpid, dladdr) and the raw allocator
+# (malloc/posix_memalign/free, _aligned_malloc on Windows) behind src/sys.
+# Also ENOENT and a couple of other constants used directly in tests.
 
 serde = { version = "1.0.229", features = ["derive"] }
 # Serialization and deserialization of request and response structures.
@@ -107,7 +114,6 @@ bytemuck = { version = "1.25.2", features = ["derive"] }
 ipc-channel = "0.23.0"
 # Provides IPC channels for communication between processes.
 # Messages are serialized/deserialized via serde and transferred
-# through operating system IPC primitives.
 
 # ======================================================================================================================
 
@@ -129,7 +135,7 @@ non_camel_case_types = "allow"
 # ======================================================================================================================
 
 # Clippy debugging:
-# cargo clippy
+# cargo clippy --all-targets -- -D warnings
 
 [lints.clippy]
 unused_unit = "allow"

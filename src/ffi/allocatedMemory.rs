@@ -163,7 +163,7 @@ mod tests
 {
   use crate::ffi;
   use crate::ffi::allocatedMemory::AllocatedMemory;
-  use crate::platform::LibcPath;
+  use crate::platform::{LibcPath, TimeLibPath, TimeSymbolName};
   use bytemuck::{Pod, Zeroable};
   // ===============================================================================================
 
@@ -274,29 +274,54 @@ mod tests
     assert_eq!(result.b, 0xFFFFFFFFFFFFFFFFu64 as i64, "i64 should be 0xFFFFFFFFFFFFFFFF");
   }
 
-  /// readStruct via FFI call (clock_gettime).
+  /// readStruct via an FFI call into the OS wall clock: `clock_gettime` on
+  /// Unix, `GetSystemTimeAsFileTime` on Windows — different layout, same
+  /// readStruct.
   #[test]
   fn readStructFromFFI() -> ()
   {
+    #[cfg(unix)]
     #[repr(C)]
     #[derive(Copy, Clone, Pod, Zeroable, Debug)]
-    struct Timespec { secs: i64, nanos: i64 }
+    struct Clock { secs: i64, nanos: i64 }
 
-    let ts: Timespec = ffi!(|scope| {
-      let libc: Library = scope.load(LibcPath)?;
-      let mem: AllocatedMemory = scope.alloc(size_of::<Timespec>())?;
+    #[cfg(windows)]
+    #[repr(C)]
+    #[derive(Copy, Clone, Pod, Zeroable, Debug)]
+    struct Clock { ticks: u64 }
 
-      libc.call("clock_gettime")
+    let clock: Clock = ffi!(|scope| {
+      let clockLib: Library = scope.load(TimeLibPath)?;
+      let mem: AllocatedMemory = scope.alloc(size_of::<Clock>())?;
+
+      #[cfg(unix)]
+      clockLib.call(TimeSymbolName)
         .arg::<i32>(0) // CLOCK_REALTIME
         .arg(mem.asPointer())
         .void()?;
 
-      mem.readStruct::<Timespec>()
-    }).expect("readStruct from clock_gettime failed");
+      #[cfg(windows)]
+      clockLib.call(TimeSymbolName)
+        .arg(mem.asPointer())
+        .void()?;
 
-    // Both fields should be non-zero for a real time
-    assert!(ts.secs > 0, "seconds should be positive, got {}", ts.secs);
-    assert!(ts.nanos >= 0 && ts.nanos < 1_000_000_000, "nanos should be in [0, 1e9), got {}", ts.nanos);
+      mem.readStruct::<Clock>()
+    }).expect("readStruct from the system clock failed");
+
+    #[cfg(unix)]
+    {
+      assert!(clock.secs > 0, "seconds should be positive, got {}", clock.secs);
+      assert!(
+        clock.nanos >= 0 && clock.nanos < 1_000_000_000,
+        "nanos should be in [0, 1e9), got {}", clock.nanos
+      );
+    }
+
+    #[cfg(windows)]
+    assert!(
+      clock.ticks > crate::platform::FileTimeUnixEpoch,
+      "FILETIME should be past the Unix epoch, got {}", clock.ticks
+    );
   }
 
   // ===============================================================================================

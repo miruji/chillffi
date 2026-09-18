@@ -24,10 +24,10 @@ impl PathResolver
 
   /// Resolves a file name by searching in the registered directories. 
   /// 
-  /// Returns None if the name contains a slash or the file is not found.
+  /// Returns None if the name contains a path separator or the file is not found.
   pub fn resolve(&self, name: &str) -> Option<String>
   {
-    if name.contains('/') { return None; }
+    if name.contains(std::path::is_separator) { return None; }
     self.dirs.iter()
       .map(|dir| dir.join(name))
       .find(|p| p.exists())

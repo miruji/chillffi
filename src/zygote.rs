@@ -1,7 +1,8 @@
 use crate::ffi::errors::FFIError;
 use crate::ffi::types::{Type, Value};
+use crate::sys;
 use crate::worker::executeFFI;
-use crate::worker::takeLastErrno;
+use crate::worker::{takeLastErrno, takeLastOsError};
 use fxhash::FxHashMap;
 use ipc_channel::ipc::{self, IpcOneShotServer, IpcReceiver, IpcSender};
 use libloading::Library;
@@ -44,6 +45,12 @@ use std::thread;
 /// Hidden startup flag: if it is the first argument —
 /// this is not the runtime, but the zygote process.
 pub const ZygoteFlag: &str = "__zygote";
+
+/// Hidden startup flag of a clone on platforms without `fork` (Windows):
+/// a clone there is a fresh process re-running this executable, and this
+/// flag is what tells it to become a clone instead of an ordinary Runtime.
+#[cfg(windows)]
+pub const CloneFlag: &str = "__zygoteClone";
 
 /// Request for FFI execution, sent entirely to the zygote.
 #[derive(Debug, Serialize, Deserialize)]
@@ -115,10 +122,11 @@ pub enum FFIRequest
 #[derive(Serialize, Deserialize)]
 pub enum FFIResponse
 {
-  /// Successful execution with the returned value, plus `errno` captured
-  /// immediately after the call — `Some` only if the request asked for it
-  /// via `readErrno`, `None` otherwise (including for non-Call requests).
-  Ok(Value, Option<i32>),
+  /// Successful execution with the returned value, plus `errno` and — on
+  /// Windows — `GetLastError`, both captured immediately after the call.
+  /// `Some` only if the request asked for it via `readErrno`, `None`
+  /// otherwise. The third field stays `None` outside Windows.
+  Ok(Value, Option<i32>, Option<u32>),
 
   /// Execution failed with the corresponding error.
   Err(FFIError)
@@ -152,7 +160,7 @@ enum ZygoteReply
   /// - `requestTx` — Runtime sends [`FFIRequest`] to the clone
   /// - `responseRx` — Runtime receives [`FFIResponse`] from the clone
   Clone {
-    pid: i32,
+    pid: u32,
     requestTx: IpcSender<FFIRequest>,
     responseRx: IpcReceiver<FFIResponse>
   },
@@ -209,7 +217,7 @@ pub static ZygoteState: OnceLock<Mutex<ZygoteHandle>> = OnceLock::new();
 pub struct ClonedZygote
 {
   /// Process PID.
-  pub pid: libc::pid_t,
+  pub pid: u32,
   /// Sends FFI requests to the clone.
   requestTx: IpcSender<FFIRequest>,
   /// Receives FFI responses from the clone.
@@ -295,7 +303,7 @@ impl Drop for ClonedZygote
   /// the main zygote is not affected.
   fn drop(&mut self) -> ()
   {
-    unsafe{ libc::kill(self.pid, libc::SIGKILL); }
+    sys::killProcess(self.pid);
   }
 }
 
@@ -428,7 +436,7 @@ fn zygoteLoop(serverName: String) -> !
   // This must not be written in the main runtime: there, waitpid
   // in supervisorLoop() tracks the Zygote process itself,
   // and with SIG_IGN it will fail with ECHILD and enter guaranteed CPU load.
-  unsafe{ libc::signal(libc::SIGCHLD, libc::SIG_IGN); }
+  sys::ignoreChildExits(); // no-op on Windows: no SIGCHLD, no zombies
 
   // Control channels: Runtime holds commandTx + replyRx;
   // Main Zygote holds commandRx + replyTx.
@@ -499,81 +507,125 @@ fn zygoteLoop(serverName: String) -> !
           }
         };
 
-        // Forks the main zygote to spawn a fresh, clean clone process.
-        match unsafe{ libc::fork() }
+        // Fork the main zygote for a Unix clone; on Windows there is no
+        // fork, so spawn a fresh process running this same executable.
+        #[cfg(unix)]
+        let spawned: Option<u32> = match unsafe{ libc::fork() }
         {
-          -1 =>
-          {
-            let _ = replyTx.send(ZygoteReply::SpawnFailed);
-          }
+          -1 => None,
           0 =>
           {
-            // macOS / Mach ports + fork:
-            // After fork the child inherits ipc-channel ends (cloneServer, commandRx,
-            // replyTx) whose port names are often already invalid in the child task.
-            // Calling Drop on them panics inside ipc-channel (InvalidName /
-            // mach_port_deallocate). Parent still holds the live rights — child must
-            // NOT Drop any pre-fork ipc-channel object; only mem::forget.
+            // macOS / Mach ports: the child inherits ipc-channel ends
+            // (cloneServer, commandRx, replyTx) whose port names are
+            // already invalid in this task. Dropping them panics inside
+            // ipc-channel — forget instead, then rebuild channels fresh.
             std::mem::forget(cloneServer);
             std::mem::forget(commandRx);
             std::mem::forget(replyTx);
-            // Channels are born here — after fork — so Mach rights are fresh.
-            let (requestTx, requestRx): (IpcSender<FFIRequest>, IpcReceiver<FFIRequest>) = 
-              match ipc::channel::<FFIRequest>()
-              {
-                Ok(p) => p,
-                Err(_) => std::process::exit(1)
-              };
-            let (responseTx, responseRx): (IpcSender<FFIResponse>, IpcReceiver<FFIResponse>) = 
-              match ipc::channel::<FFIResponse>()
-              {
-                Ok(p) => p,
-                Err(_) => std::process::exit(1)
-              };
-            let bootstrapTx: IpcSender<CloneBootstrap> =
-              match IpcSender::connect(cloneServerName)
-              {
-                Ok(tx) => tx,
-                Err(_) => std::process::exit(1)
-              };
-            // Hand parent (→ Runtime) the ends that send requests / receive responses.
-            if bootstrapTx
-              .send(CloneBootstrap {
-                requestTx,
-                responseRx
-              })
-              .is_err()
+            cloneBootstrapLoop(cloneServerName)
+          }
+          pid => Some(pid as u32)
+        };
+
+        #[cfg(windows)]
+        let spawned: Option<u32> = match env::current_exe()
+          .and_then(|currentExe| {
+            Command::new(currentExe)
+              .arg(CloneFlag)
+              .arg(&cloneServerName)
+              .stdin(Stdio::null())
+              .stdout(Stdio::inherit())
+              .stderr(Stdio::inherit())
+              .spawn()
+          })
+        {
+          Ok(child) => Some(child.id()),
+          Err(_) => None
+        };
+
+        let Some(pid) = spawned else
+        {
+          let _ = replyTx.send(ZygoteReply::SpawnFailed);
+          continue;
+        };
+
+        // Receive the Runtime-facing ends from the clone, forward them on.
+        let (_rx, bootstrap): (IpcReceiver<CloneBootstrap>, CloneBootstrap) =
+          match cloneServer.accept()
+          {
+            Ok(v) => v,
+            Err(_) =>
             {
-              std::process::exit(1);
+              sys::killProcess(pid);
+              let _ = replyTx.send(ZygoteReply::SpawnFailed);
+              continue;
             }
-            drop(bootstrapTx);
-            cloneLoop(requestRx, responseTx);
-          }
-          pid =>
-          { // Parent: receive Runtime-facing ends from the child, forward to Runtime.
-            let (_rx, bootstrap): (IpcReceiver<CloneBootstrap>, CloneBootstrap) =
-              match cloneServer.accept()
-              {
-                Ok(v) => v,
-                Err(_) =>
-                {
-                  let _ = replyTx.send(ZygoteReply::SpawnFailed);
-                  continue;
-                }
-              };
-            let _ = replyTx.send(ZygoteReply::Clone {
-              pid,
-              requestTx: bootstrap.requestTx,
-              responseRx: bootstrap.responseRx
-            });
-            //
-          }
-        }
+          };
+
+        let _ = replyTx.send(ZygoteReply::Clone {
+          pid,
+          requestTx: bootstrap.requestTx,
+          responseRx: bootstrap.responseRx
+        });
         //
       }
     }
     //
   }
+}
+
+// =================================================================================================
+
+/// Tail of clone startup, shared by a forked clone and a spawned one: build
+/// both data channels inside the clone, connect back to the one-shot server
+/// the main zygote is waiting on, hand over the Runtime-facing ends, serve.
+fn cloneBootstrapLoop(serverName: String) -> !
+{
+  let (requestTx, requestRx): (IpcSender<FFIRequest>, IpcReceiver<FFIRequest>) =
+    match ipc::channel::<FFIRequest>()
+    {
+      Ok(p) => p,
+      Err(_) => std::process::exit(1)
+    };
+  let (responseTx, responseRx): (IpcSender<FFIResponse>, IpcReceiver<FFIResponse>) =
+    match ipc::channel::<FFIResponse>()
+    {
+      Ok(p) => p,
+      Err(_) => std::process::exit(1)
+    };
+
+  let bootstrapTx: IpcSender<CloneBootstrap> = match IpcSender::connect(serverName)
+  {
+    Ok(tx) => tx,
+    Err(_) => std::process::exit(1)
+  };
+
+  if bootstrapTx
+    .send(CloneBootstrap {
+      requestTx,
+      responseRx
+    })
+    .is_err()
+  {
+    std::process::exit(1);
+  }
+  drop(bootstrapTx);
+
+  cloneLoop(requestRx, responseTx);
+}
+
+/// Entry point of a clone process on platforms without `fork`. Reached from
+/// the ctor in `lib.rs` when `argv[1]` is [`CloneFlag`], with `argv[2]`
+/// naming the [`IpcOneShotServer`] the main zygote is waiting on.
+#[cfg(windows)]
+pub fn runAsClone() -> !
+{
+  let serverName: String = env::args()
+    .nth(2)
+    .expect("zygote clone: missing IpcOneShotServer name (argv[2])");
+
+  sys::silenceCrashReporting();
+  cloneBootstrapLoop(serverName);
 }
 
 // =================================================================================================
@@ -620,7 +672,7 @@ fn handleRequest(
     // `takeLastErrno` reads whatever `invokeFFI` stashed right after `cif.call()`
     // (or `None`, for requests that never call — Alloc, Free, ReadMemory, ...
     // and for calls that didn't ask for it) — and clears it for the next request.
-    Ok(v) => FFIResponse::Ok(v, takeLastErrno()),
+    Ok(v) => FFIResponse::Ok(v, takeLastErrno(), takeLastOsError()),
     Err(e) => FFIResponse::Err(e)
   }
 }
@@ -645,7 +697,7 @@ fn supervisorLoop() -> ()
     };
 
     // Blocks the supervisor thread until the monitored main zygote process terminates.
-    unsafe{ libc::waitpid(pidToWait as libc::pid_t, std::ptr::null_mut(), 0); }
+    sys::waitProcess(pidToWait);
 
     // Acquires the global state lock to replace the terminated zygote with a new instance.
     let mutex: &Mutex<ZygoteHandle> = ZygoteState.get().unwrap();

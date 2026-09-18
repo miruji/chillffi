@@ -1,7 +1,9 @@
 #[path = "../platform/mod.rs"]
 mod platform;
-use crate::platform::LibcPath;
+use crate::platform::{TimeLibPath, TimeSymbolName};
 use crate::platform::platformExt;
+#[cfg(windows)]
+use crate::platform::FileTimeUnixEpoch;
 // =================================================================================================
 use chillffi::ffi;
 use chillffi::ffi::allocatedMemory::AllocatedMemory;
@@ -21,21 +23,38 @@ fn main() -> ()
 
 // =================================================================================================
 
-/// Read a `clock_gettime` out-parameter via a runtime shape.
+/// Read the OS wall clock's out-parameter via a runtime shape.
 fn readDynamicStruct() -> ()
 {
   let (secs, nanos): (i64, i64) = ffi!(|scope| {
-    let libc: Library = scope.load(LibcPath)?;
+    let clockLib: Library = scope.load(TimeLibPath)?;
     let mem: AllocatedMemory = scope.alloc(16)?;
 
-    libc.call("clock_gettime").arg::<i32>(0).arg(mem.asPointer()).void()?;
+    #[cfg(unix)]
+    clockLib.call(TimeSymbolName).arg::<i32>(0).arg(mem.asPointer()).void()?;
+    #[cfg(windows)]
+    clockLib.call(TimeSymbolName).arg(mem.asPointer()).void()?;
 
-    // struct timespec { time_t tv_sec; long tv_nsec; }
-    let fields: DynamicList = Scope::readDynamicStruct(mem.address(), &[Type::I64, Type::I64])?;
-    Ok((fields.get(0)?, fields.get(1)?))
+    #[cfg(unix)]
+    let parsed: (i64, i64) = {
+      // struct timespec { time_t tv_sec; long tv_nsec; }
+      let fields: DynamicList = Scope::readDynamicStruct(mem.address(), &[Type::I64, Type::I64])?;
+      (fields.get(0)?, fields.get(1)?)
+    };
+
+    #[cfg(windows)]
+    let parsed: (i64, i64) = {
+      // FILETIME { u64 ticks }
+      let fields: DynamicList = Scope::readDynamicStruct(mem.address(), &[Type::U64])?;
+      let ticks: u64 = fields.get(0)?;
+      let sinceEpoch: u64 = ticks.saturating_sub(FileTimeUnixEpoch);
+      ((sinceEpoch / 10_000_000) as i64, ((sinceEpoch % 10_000_000) * 100) as i64)
+    };
+
+    Ok(parsed)
   }).expect("readDynamicStruct failed");
 
-  println!("ok: readDynamicStruct -> clock_gettime = {secs}.{nanos:09}");
+  println!("ok: readDynamicStruct -> realtime = {secs}.{nanos:09}");
 }
 
 /// ```c

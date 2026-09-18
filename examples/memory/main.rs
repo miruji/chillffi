@@ -1,6 +1,6 @@
 #[path = "../platform/mod.rs"]
 mod platform;
-use crate::platform::LibcPath;
+use crate::platform::{CloseSymbolName, LibcPath, PipeSymbolName, ReadSymbolName, WriteSymbolName};
 // =================================================================================================
 use chillffi::ffi;
 use chillffi::ffi::allocatedMemory::AllocatedMemory;
@@ -36,7 +36,17 @@ fn pipeRoundtrip() -> ()
 
     // int pipefd[2]; — the out-parameter pipe() fills in.
     let fdsMem: AllocatedMemory = scope.alloc(8)?;
-    let result: i32 = libc.call("pipe").arg(fdsMem.asPointer()).result()?;
+
+    // _pipe on Windows takes a buffer size and mode; _read/_write there take
+    // an unsigned int count instead of POSIX's size_t.
+    #[cfg(unix)]
+    let result: i32 = libc.call(PipeSymbolName).arg(fdsMem.asPointer()).result()?;
+    #[cfg(windows)]
+    let result: i32 = libc.call(PipeSymbolName)
+      .arg(fdsMem.asPointer())
+      .arg::<u32>(4096)    // pipe buffer size
+      .arg::<i32>(0x8000)  // _O_BINARY
+      .result()?;
     if result != 0 {
       return Err(FFIError::Other("pipe() failed".into()));
     }
@@ -45,14 +55,20 @@ fn pipeRoundtrip() -> ()
     let readFd: i32 = i32::from_ne_bytes(fdsBytes[0..4].try_into().unwrap());
     let writeFd: i32 = i32::from_ne_bytes(fdsBytes[4..8].try_into().unwrap());
 
-    libc.call("write").arg(writeFd).arg(b"hi".to_vec()).arg::<usize>(2).void()?;
+    #[cfg(unix)]
+    libc.call(WriteSymbolName).arg(writeFd).arg(b"hi".to_vec()).arg::<usize>(2).void()?;
+    #[cfg(windows)]
+    libc.call(WriteSymbolName).arg(writeFd).arg(b"hi".to_vec()).arg::<u32>(2).void()?;
 
     let bufMem: AllocatedMemory = scope.alloc(2)?;
-    libc.call("read").arg(readFd).arg(bufMem.asPointer()).arg::<usize>(2).void()?;
+    #[cfg(unix)]
+    libc.call(ReadSymbolName).arg(readFd).arg(bufMem.asPointer()).arg::<usize>(2).void()?;
+    #[cfg(windows)]
+    libc.call(ReadSymbolName).arg(readFd).arg(bufMem.asPointer()).arg::<u32>(2).void()?;
     let readBytes: Vec<u8> = bufMem.read()?;
 
-    libc.call("close").arg(readFd).void()?;
-    libc.call("close").arg(writeFd).void()?;
+    libc.call(CloseSymbolName).arg(readFd).void()?;
+    libc.call(CloseSymbolName).arg(writeFd).void()?;
 
     Ok(readBytes)
   }).expect("pipe roundtrip failed");

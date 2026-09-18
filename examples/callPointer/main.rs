@@ -1,6 +1,6 @@
 #[path = "../platform/mod.rs"]
 mod platform;
-use crate::platform::LibcPath;
+use crate::platform::{LibcPath, SignalNumber};
 // =================================================================================================
 use chillffi::callback;
 use chillffi::callvPointer;
@@ -28,14 +28,14 @@ fn callvPointerOnSignalReturnedHandler() -> ()
 
     // Install it. The signal is never raised — signal() only stores and
     // returns pointers, delivery is irrelevant here.
-    libc.call("signal").arg::<i32>(10 /* SIGUSR1 */).arg(handler).void()?;
+    libc.call("signal").arg::<i32>(SignalNumber).arg(handler).void()?;
 
     // Restore SIG_DFL and capture what signal() reports as "previous" —
     // has to be the exact address just installed above.
-    let old: Pointer = libc.call("signal").arg::<i32>(10).arg(Pointer(0)).result()?;
+    let old: Pointer = libc.call("signal").arg::<i32>(SignalNumber).arg(Pointer(0)).result()?;
 
     // Call that address directly, bypassing signal() entirely.
-    callvPointer!(scope, old, 10_i32)?;
+    callvPointer!(scope, old, SignalNumber)?;
 
     Ok(())
   }).expect("signal roundtrip failed");

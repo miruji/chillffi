@@ -364,6 +364,16 @@ impl<'g> Scope<'g>
     crate::ffi::library::lastErrno()
   }
 
+  /// OS error code captured alongside [`Scope::lastErrno`], under the same
+  /// `readErrno` flag. On Windows this is `GetLastError()` — the channel
+  /// most Win32 functions actually report failure through. Always `None`
+  /// on Unix.
+  #[inline]
+  pub fn lastOsError() -> Option<u32>
+  {
+    crate::ffi::library::lastOsError()
+  }
+
   // ===============================================================================================
 
   /// Registers a closure built with [`callback!`] as an FFI-callable function
@@ -496,7 +506,7 @@ mod tests
   use crate::ffi::types::primitive::{Arg, Callback, DynamicList, Pointer};
   use crate::ffi::types::Type;
   use crate::pathResolver::addGlobalSearchPath;
-  use crate::platform::{platformExt, LibcPath, LibmPath};
+  use crate::platform::{platformExt, LibcPath, LibmPath, OpenSymbolName, SignalNumber};
   // ===============================================================================================
 
   /// Checks explicit memory release via [`Scope::free`].
@@ -605,7 +615,7 @@ mod tests
       scope.setReadErrno(true);
       let libc: Library = scope.load(LibcPath)?;
       let fd: i32 =
-        libc.call("open")
+        libc.call(OpenSymbolName)
           .arg(c"/no/such/chillffi/scope/path")
           .arg::<i32>(0 /* O_RDONLY */)
           .result()?; // relies on the scope default, not .errno()
@@ -704,7 +714,7 @@ mod tests
       scope.setReadErrno(true); // scope default: capture errno
       let libc: Library = scope.load(LibcPath)?;
       let fd: i32 =
-        libc.call("open")
+        libc.call(OpenSymbolName)
           .arg(c"/no/such/chillffi/noErrno/path")
           .arg::<i32>(0 /* O_RDONLY */)
           .noErrno() // per-call override should win over the scope default
@@ -793,8 +803,8 @@ mod tests
         unsafe{ *(addr as *mut i32) = signum; }
       });
 
-      libc.call("signal").arg::<i32>(10 /* SIGUSR1 */).arg(handler).void()?;
-      let old: Pointer = libc.call("signal").arg::<i32>(10).arg(Pointer(0)).result()?;
+      libc.call("signal").arg::<i32>(SignalNumber).arg(handler).void()?;
+      let old: Pointer = libc.call("signal").arg::<i32>(SignalNumber).arg(Pointer(0)).result()?;
 
       // callvPointer: call the raw address directly.
       scope.callvPointer(old, vec![Arg::from(11i32)])?;

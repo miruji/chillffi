@@ -60,6 +60,11 @@ thread_local!{
   static LastErrno: std::cell::Cell<Option<i32>> = const {
     std::cell::Cell::new(None) 
   };
+
+  /// Windows counterpart of `LastErrno`: `GetLastError`, `None` elsewhere.
+  static LastOsError: std::cell::Cell<Option<u32>> = const {
+    std::cell::Cell::new(None)
+  };
 }
 
 /// Reads the errno left behind by the most recent request on this thread.
@@ -67,6 +72,12 @@ thread_local!{
 pub(super) fn lastErrno() -> Option<i32>
 {
   LastErrno.get()
+}
+
+/// See [`crate::ffi::scope::Scope::lastOsError`] — the public entry point.
+pub(super) fn lastOsError() -> Option<u32>
+{
+  LastOsError.get()
 }
 
 /// Resolves the effective errno-capture flag for a call: an explicit
@@ -102,8 +113,9 @@ pub(super) fn sendRawRequest(request: FFIRequest) -> Result<Value, FFIError>
     let zygote: &mut ClonedZygote = mutStack.last_mut().ok_or(FFIError::NoActiveZygoteScope)?;
 
     match zygote.call(request) {
-      Ok(FFIResponse::Ok(val, errno)) => {
+      Ok(FFIResponse::Ok(val, errno, osError)) => {
         LastErrno.set(errno);
+        LastOsError.set(osError);
         Ok(val)
       }
       Ok(FFIResponse::Err(err)) => Err(err),
@@ -330,7 +342,7 @@ mod tests
   use crate::ffi;
   use crate::ffi::library::getRegistry;
   use crate::ffi::scope::Scope;
-  use crate::platform::{platformExt, LibcPath, LibmPath};
+  use crate::platform::{platformExt, LibcPath, LibmPath, OpenSymbolName};
   // ===============================================================================================
 
   /// Checks that `.errno()` makes a failed call's errno observable via
@@ -341,7 +353,7 @@ mod tests
     let errno: Option<i32> = ffi!(|scope| {
       let libc: Library = scope.load(LibcPath)?;
       let fd: i32 =
-        libc.call("open")
+        libc.call(OpenSymbolName)
           .arg(c"/no/such/chillffi/test/path")
           .arg::<i32>(0 /* O_RDONLY */)
           .errno()
@@ -362,7 +374,7 @@ mod tests
     let errno: Option<i32> = ffi!(|scope| {
       let libc: Library = scope.load(LibcPath)?;
       let fd: i32 =
-        libc.call("open")
+        libc.call(OpenSymbolName)
           .arg(c"/no/such/chillffi/test/path2")
           .arg::<i32>(0)
           .result()?; // no .errno()

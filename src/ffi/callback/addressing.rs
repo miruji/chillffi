@@ -8,9 +8,7 @@ use std::hash::Hasher;
 #[doc(hidden)]
 pub fn moduleBase() -> usize
 {
-  let mut info: libc::Dl_info = unsafe{ std::mem::zeroed() };
-  unsafe{ libc::dladdr(moduleBase as *const () as *const libc::c_void, &mut info) };
-  info.dli_fbase as usize
+  crate::sys::moduleBase()
 }
 
 /// Turns an absolute function pointer (in *this* process) into an offset.
