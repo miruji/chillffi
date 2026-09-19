@@ -9,6 +9,8 @@ use std::ffi::c_void;
 #[cfg(target_arch = "x86_64")]
 use std::path::PathBuf;
 use std::ptr;
+use std::sync::{Mutex, PoisonError};
+use std::time::{SystemTime, UNIX_EPOCH};
 use crate::platform::low;
 // =================================================================================================
 
@@ -239,6 +241,13 @@ unsafe extern "system"
 // Only needed for the x64 PDB strategy. On ARM64 there's nothing to link
 // to (would just be dead symbols), so the whole block is cfg-gated.
 #[cfg(target_arch = "x86_64")]
+#[link(name = "bcryptprimitives", kind = "raw-dylib")]
+unsafe extern "system"
+{
+  /// The system per-processor PRNG (what `getrandom` / `Uuid::new_v4` end up in).
+  fn ProcessPrng(data: *mut u8, length: usize) -> i32;
+}
+
 #[link(name = "dbghelp")]
 unsafe extern "system"
 {
@@ -327,6 +336,26 @@ pub fn waitProcess(pid: low::ProcessId) -> ()
   }
   unsafe{ WaitForSingleObject(process, Infinite) };
   unsafe{ CloseHandle(process) };
+}
+
+/// Makes the RNG stream of a fresh clone differ from those of its siblings.
+///
+/// A clone starts with a copy of the memory of Main Zygote, and the RNG
+/// behind `Uuid::new_v4` (`ProcessPrng`) keeps its state there: clones taken
+/// from the same Main Zygote then draw the *same* UUIDs, i.e. the same
+/// `ipc-channel` pipe names. Skipping a pid/time dependent amount of output
+/// puts every clone at its own place in the stream (up to 1 MiB, well below a
+/// millisecond).
+pub fn decorrelateRandom() -> ()
+{
+  let nanos: u32 = SystemTime::now()
+    .duration_since(UNIX_EPOCH)
+    .map_or(0, |elapsed| elapsed.subsec_nanos());
+  let mixed: u32 = nanos ^ currentProcessId().wrapping_mul(0x9E37_79B1);
+  let length: usize = (mixed & 0xFFFF) as usize * 16 + 16;
+
+  let mut skipped: Vec<u8> = vec![0u8; length];
+  unsafe{ ProcessPrng(skipped.as_mut_ptr(), skipped.len()) };
 }
 
 /// Exit code of a process that has terminated; `None` while it is running.
@@ -425,11 +454,31 @@ pub fn cloneProcess() -> Result<CloneResult, i32>
   })
 }
 
-/// todo desc
+/// Process handles of the most recent clones, kept open by Main Zygote.
+///
+/// A process object lives exactly as long as somebody holds a handle to it.
+/// Without this, a clone that dies right after `RtlCloneUserProcess` is gone
+/// before the Runtime can ask why (`OpenProcess` fails with
+/// `ERROR_INVALID_PARAMETER`); with it, `processExitCode` still has the answer.
+/// Handles are stored as `usize`: a raw pointer is not `Send`.
+static RecentCloneProcesses: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+
+/// How many clone process handles Main Zygote keeps.
+const RecentCloneProcessesLimit: usize = 256;
+
+/// Called by Main Zygote after a successful `cloneProcess()`.
+///
+/// The thread handle is closed at once; the process handle is kept (see
+/// [`RecentCloneProcesses`]) and only the oldest one is closed to make room.
 pub fn closeCloneHandles(result: &CloneResult) -> ()
 {
-  closeHandle(result.processHandle);
   closeHandle(result.threadHandle);
+
+  let mut recent = RecentCloneProcesses.lock().unwrap_or_else(PoisonError::into_inner);
+  recent.push(result.processHandle as usize);
+  if recent.len() > RecentCloneProcessesLimit {
+    closeHandle(recent.remove(0) as Handle);
+  }
 }
 
 // =================================================================================================

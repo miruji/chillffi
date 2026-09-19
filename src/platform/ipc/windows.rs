@@ -8,12 +8,13 @@
 //!   hands over its `IpcSender<ZygoteCommand>` + `IpcReceiver<ZygoteReply>`,
 //!   and the one-shot is dropped.
 //!
-//! - **Data plane** (Runtime ↔ Clone): per-clone `IpcOneShotServer` owned by
-//!   the *Runtime*. Its name travels in `SpawnClone`, Main Zygote only clones
-//!   and answers with the pid. The clone creates a fresh `ipc::channel()`
-//!   pair, connects to the Runtime and sends the Runtime-facing ends itself.
+//! - **Data plane** (Runtime ↔ Clone): the Runtime creates both channel pairs
+//!   itself. Per clone: the Runtime listens on a one-shot server and passes
+//!   its name in `SpawnClone`; Main Zygote only clones and answers with the
+//!   pid; the clone opens its own short-lived setup server and tells the
+//!   Runtime its name; the Runtime sends the clone-side ends there.
 //!
-//! # Why the Runtime and not Main Zygote is the rendezvous point
+//! # Why the Runtime is the rendezvous point
 //!
 //! `RtlCloneUserProcess` copies the memory of Main Zygote, and `ipc-channel`
 //! keeps process-wide state in it: its cached pid (`CURRENT_PROCESS_ID`,
@@ -23,6 +24,17 @@
 //! duplicates the handles into itself instead of into Main Zygote. A pipe
 //! owned by the Runtime does not match the stale pid, so the same `send`
 //! works. Main Zygote never sends channel ends after its bootstrap.
+//!
+//! # Why the Runtime creates the long-lived channels
+//!
+//! Pipe names are UUIDs, and the RNG behind them (`ProcessPrng`) is copied
+//! together with the rest of the memory: clones of one Main Zygote draw the
+//! same UUIDs. Names chosen by a clone would collide with those of its
+//! siblings, and `ipc-channel` keeps received handles open, so a dead clone
+//! would go on occupying its names. The names of the long-lived channels come
+//! from the Runtime instead (an ordinary process), and the clone only creates
+//! a setup server that lives for the duration of the bootstrap
+//! (`low::decorrelateRandom` moves it to its own place in the stream).
 // =================================================================================================
 use super::Transport as TransportTrait;
 use super::{
@@ -55,15 +67,15 @@ pub const CloneFlag: &str = "__zygoteClone";
 /// Backend tag used in diagnostics.
 const BackendName: &str = "windows-rtlcloneuserprocess";
 
-/// How long a clone may take to reach its bootstrap `send`.
+/// How long a clone may take to greet the Runtime.
 const CloneBootstrapTimeout: Duration = Duration::from_secs(20);
 
-/// Exit codes of a clone that failed before it could report back. Nobody
-/// reads the stderr of a clone reliably; the Runtime puts the code into its error.
-const CloneExitRequestChannel: i32 = 11;
-const CloneExitResponseChannel: i32 = 12;
-const CloneExitConnect: i32 = 13;
-const CloneExitSend: i32 = 14;
+/// Exit codes of a clone that failed during its bootstrap. Nobody reads the
+/// stderr of a clone reliably; the Runtime puts the code into its error.
+const CloneExitSetupServer: u32 = 11;
+const CloneExitConnect: u32 = 12;
+const CloneExitHello: u32 = 13;
+const CloneExitSetup: u32 = 14;
 
 // =================================================================================================
 
@@ -74,8 +86,8 @@ pub enum ZygoteCommand
   /// Ask Main Zygote to `RtlCloneUserProcess` a clone.
   ///
   /// `bootstrapName` is the name of the [`IpcOneShotServer`] that the
-  /// *Runtime* listens on: the clone connects to it directly and hands over
-  /// its channel ends itself, Main Zygote never touches them.
+  /// *Runtime* listens on: the clone connects to it directly and greets the
+  /// Runtime, Main Zygote never touches the data channels.
   SpawnClone { bootstrapName: String }
 }
 
@@ -83,8 +95,8 @@ pub enum ZygoteCommand
 #[derive(Serialize, Deserialize)]
 pub enum ZygoteReply
 {
-  /// The clone process exists; only its pid. The channel ends do not pass
-  /// through Main Zygote — the clone sends them straight to the Runtime.
+  /// The clone process exists; only its pid. No channel ends pass through
+  /// Main Zygote — the clone and the Runtime settle them between themselves.
   Cloned { pid: u32 },
 
   /// `cloneProcess()` failed inside Main Zygote.
@@ -102,16 +114,25 @@ struct BootstrapToRuntime
   replyRx: IpcReceiver<ZygoteReply>
 }
 
-/// First message from a freshly cloned process → Runtime.
-/// Carries the ends that Runtime will use; the clone keeps the opposite ends.
+/// First message from a freshly cloned process → Runtime: "I am up, my
+/// setup server is called `setupName`".
 #[derive(Serialize, Deserialize)]
-struct CloneBootstrap
+struct CloneHello
 {
   /// todo desc
-  requestTx: IpcSender<FFIRequest>,
+  setupName: String
+}
+
+/// Runtime → clone, over the setup server of the clone: the clone-side ends
+/// of the two data channels the Runtime has created.
+#[derive(Serialize, Deserialize)]
+struct CloneSetup
+{
+  /// todo desc
+  requestRx: IpcReceiver<FFIRequest>,
 
   /// todo desc
-  responseRx: IpcReceiver<FFIResponse>
+  responseTx: IpcSender<FFIResponse>
 }
 
 // =================================================================================================
@@ -135,6 +156,9 @@ pub struct ZygoteHandle
 /// Runtime-side data endpoint.
 pub struct RuntimeSide
 {
+  /// Pid of the clone, to say what became of it when the channel breaks.
+  pub pid: u32,
+
   /// Runtime → Clone requests.
   pub requestTx: IpcSender<FFIRequest>,
 
@@ -214,12 +238,22 @@ impl TransportTrait for Transport
     })
   }
 
-  /// Runtime asks Main Zygote to clone a process and receives the clone's
-  /// channel ends straight from the clone (see the module docs).
+  /// Runtime asks Main Zygote to clone a process and hands the clone its
+  /// channel ends (see the module docs).
   fn sendSpawnClone(handle: &Self::ZygoteHandle) -> io::Result<Self::Bootstrap>
   {
+    // The long-lived channels: created here, named by the Runtime's RNG.
+    let (requestTx, requestRx): (
+      IpcSender<FFIRequest>,
+      IpcReceiver<FFIRequest>
+    ) = ipc::channel::<FFIRequest>()?;
+    let (responseTx, responseRx): (
+      IpcSender<FFIResponse>,
+      IpcReceiver<FFIResponse>
+    ) = ipc::channel::<FFIResponse>()?;
+
     let (server, serverName): (
-      IpcOneShotServer<CloneBootstrap>,
+      IpcOneShotServer<CloneHello>,
       String
     ) = IpcOneShotServer::new().map_err(io::Error::other)?;
 
@@ -254,12 +288,31 @@ impl TransportTrait for Transport
       ));
     }
 
-    let bootstrap: CloneBootstrap = acceptCloneBootstrap(server, &serverName, pid)?;
-    Ok(Bootstrap {
-      pid,
-      requestTx: bootstrap.requestTx,
-      responseRx: bootstrap.responseRx
-    })
+    // The clone is up and has opened its setup server.
+    let hello: CloneHello = acceptHello(server, &serverName, pid)?;
+
+    // Hand it its ends. The clone owns the server of this pipe, so
+    // ipc-channel duplicates the handles straight into the clone.
+    let setupTx: IpcSender<CloneSetup> = IpcSender::connect(hello.setupName)
+      .map_err(|e| {
+        low::killProcess(pid);
+        io::Error::other(format!(
+          "connecting to the setup server of clone {pid} failed: {e} ({})",
+          cloneStatus(pid)
+        ))
+      })?;
+    setupTx
+      .send(CloneSetup { requestRx, responseTx })
+      .map_err(|e| {
+        low::killProcess(pid);
+        io::Error::other(format!(
+          "sending the channels to clone {pid} failed: {e} ({})",
+          cloneStatus(pid)
+        ))
+      })?;
+    drop(setupTx);
+
+    Ok(Bootstrap { pid, requestTx, responseRx })
   }
 
   /// todo desc
@@ -292,6 +345,7 @@ impl TransportTrait for Transport
   fn runtimeConnect(bootstrap: Self::Bootstrap) -> io::Result<Self::RuntimeSide>
   {
     Ok(RuntimeSide {
+      pid: bootstrap.pid,
       requestTx: bootstrap.requestTx,
       responseRx: bootstrap.responseRx
     })
@@ -308,7 +362,12 @@ impl RuntimeSideTrait for RuntimeSide
     self
       .requestTx
       .send(request.clone())
-      .map_err(|e| format!("Zygote clone IPC failed while sending request: {e}"))
+      .map_err(|e| {
+        format!(
+          "Zygote clone IPC failed while sending request: {e} ({})",
+          cloneStatus(self.pid)
+        )
+      })
   }
 
   /// todo desc
@@ -317,7 +376,12 @@ impl RuntimeSideTrait for RuntimeSide
     self
       .responseRx
       .recv()
-      .map_err(|e| format!("Zygote clone IPC failed while reading response: {e}"))
+      .map_err(|e| {
+        format!(
+          "Zygote clone IPC failed while reading response: {e} ({})",
+          cloneStatus(self.pid)
+        )
+      })
   }
 }
 
@@ -362,18 +426,48 @@ impl CloneSideTrait for CloneSide
 
 // =================================================================================================
 
-/// Waits for the bootstrap message of the clone `pid`.
+/// Human-readable fate of a clone, for error messages.
+fn cloneStatus(pid: u32) -> String
+{
+  match low::processExitCode(pid)
+  {
+    None => format!("clone {pid} is running"),
+    Some(code) => format!(
+      "clone {pid} exited with code {code:#x}: {}",
+      cloneExitReason(code)
+    )
+  }
+}
+
+/// What an exit code of a clone most likely means.
+const fn cloneExitReason(code: u32) -> &'static str
+{
+  match code
+  {
+    CloneExitSetupServer => "could not create its setup server",
+    CloneExitConnect => "could not connect to the Runtime",
+    CloneExitHello => "could not send its greeting to the Runtime",
+    CloneExitSetup => "did not receive its channels",
+    1 => "killed by the Runtime",
+    0xC000_0005 => "access violation",
+    0xC000_0409 => "fast fail (abort, or a panic that cannot unwind)",
+    u32::MAX => "gone before it could be queried",
+    _ => "unknown"
+  }
+}
+
+/// Waits for the greeting of the clone `pid`.
 ///
 /// `IpcOneShotServer::accept` has no timeout, and a clone that died (or hung)
 /// before connecting would block the Runtime forever. A watchdog thread
 /// watches the clone and, once it exits or [`CloneBootstrapTimeout`] passes,
 /// unblocks `accept` by connecting to the server and dropping the connection.
 /// The failure then carries the reason, including the exit code of the clone.
-fn acceptCloneBootstrap(
-  server: IpcOneShotServer<CloneBootstrap>,
+fn acceptHello(
+  server: IpcOneShotServer<CloneHello>,
   serverName: &str,
   pid: u32
-) -> io::Result<CloneBootstrap>
+) -> io::Result<CloneHello>
 {
   let finished: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
   let watchdogFinished: Arc<AtomicBool> = Arc::clone(&finished);
@@ -385,19 +479,23 @@ fn acceptCloneBootstrap(
       let deadline: Instant = Instant::now() + CloneBootstrapTimeout;
       while !watchdogFinished.load(Ordering::Acquire)
       {
-        let reason: Option<String> = match low::processExitCode(pid)
+        let reason: Option<String> = if low::processExitCode(pid).is_some()
         {
-          Some(code) => Some(format!("clone {pid} exited with code {code:#x} before bootstrap")),
-          None if Instant::now() >= deadline => Some(
-            format!("clone {pid} did not bootstrap within {CloneBootstrapTimeout:?}")
-          ),
-          None => None
+          Some(format!("{} before bootstrap", cloneStatus(pid)))
+        }
+        else if Instant::now() >= deadline
+        {
+          Some(format!("clone {pid} did not bootstrap within {CloneBootstrapTimeout:?}"))
+        }
+        else
+        {
+          None
         };
         if let Some(reason) = reason
         {
           low::killProcess(pid);
           // A connection that carries nothing makes `accept` fail.
-          let _ = IpcSender::<CloneBootstrap>::connect(watchdogName);
+          let _ = IpcSender::<CloneHello>::connect(watchdogName);
           return Some(reason);
         }
         thread::sleep(Duration::from_millis(10));
@@ -420,7 +518,7 @@ fn acceptCloneBootstrap(
 
   match accepted
   {
-    Ok((_rx, bootstrap)) => Ok(bootstrap),
+    Ok((_rx, hello)) => Ok(hello),
     Err(e) =>
     {
       // Never leave a clone nobody owns.
@@ -539,52 +637,66 @@ fn zygoteLoop(serverName: String) -> !
   }
 }
 
+/// Exits a clone that failed during its bootstrap.
+fn cloneExit(code: u32) -> !
+{
+  std::process::exit(code as i32)
+}
+
 /// Bootstrap loop in a freshly cloned process.
 ///
-/// The channels must be created here, after the clone: handles created
-/// before it do not exist in the clone (its handle table is empty).
-fn cloneBootstrapLoop(serverName: String) -> !
+/// Nothing that was created before the clone is usable in it (its handle
+/// table is empty), so it starts from scratch: opens a setup server, greets
+/// the Runtime (`helloName`) with the name of it, and receives its data
+/// channels there.
+fn cloneBootstrapLoop(helloName: String) -> !
 {
-  let (requestTx, requestRx): (
-    IpcSender<FFIRequest>,
-    IpcReceiver<FFIRequest>
-  ) = match ipc::channel::<FFIRequest>() {
-    Ok(p) => p,
+  // Before the first UUID is drawn: see the module docs.
+  low::decorrelateRandom();
+
+  let (setupServer, setupName): (
+    IpcOneShotServer<CloneSetup>,
+    String
+  ) = match IpcOneShotServer::new() {
+    Ok(v) => v,
     Err(e) => {
-      eprintln!("[clone] request channel failed: {e}");
-      std::process::exit(CloneExitRequestChannel)
-    }
-  };
-  let (responseTx, responseRx): (
-    IpcSender<FFIResponse>,
-    IpcReceiver<FFIResponse>
-  ) = match ipc::channel::<FFIResponse>() {
-    Ok(p) => p,
-    Err(e) => {
-      eprintln!("[clone] response channel failed: {e}");
-      std::process::exit(CloneExitResponseChannel)
+      eprintln!("[clone] setup server failed: {e}");
+      cloneExit(CloneExitSetupServer)
     }
   };
 
-  // The server belongs to the Runtime (see the module docs).
-  let bootstrapTx: IpcSender<CloneBootstrap> =
-    match IpcSender::connect(serverName) {
-      Ok(tx) => tx,
+  // The Runtime owns this server (see the module docs).
+  let helloTx: IpcSender<CloneHello> = match IpcSender::connect(helloName) {
+    Ok(tx) => tx,
+    Err(e) => {
+      eprintln!("[clone] connect to the Runtime failed: {e}");
+      cloneExit(CloneExitConnect)
+    }
+  };
+  if let Err(e) = helloTx.send(CloneHello { setupName })
+  {
+    eprintln!("[clone] greeting failed: {e}");
+    cloneExit(CloneExitHello);
+  }
+  drop(helloTx);
+
+  let (setupRx, setup): (IpcReceiver<CloneSetup>, CloneSetup) =
+    match setupServer.accept() {
+      Ok(v) => v,
       Err(e) => {
-        eprintln!("[clone] bootstrap connect failed: {e}");
-        std::process::exit(CloneExitConnect)
+        eprintln!("[clone] receiving the channels failed: {e}");
+        cloneExit(CloneExitSetup)
       }
     };
-  if let Err(e) = bootstrapTx.send(CloneBootstrap { requestTx, responseRx })
-  {
-    eprintln!("[clone] bootstrap send failed: {e}");
-    std::process::exit(CloneExitSend);
-  }
-  drop(bootstrapTx);
+  // Free the name of the setup server: the next clone may draw the same one.
+  drop(setupRx);
 
   let cache: &mut FxHashMap<String, Library> =
     Box::leak(Box::new(FxHashMap::default()));
-  CloneSide { requestRx, responseTx }.run(cache)
+  CloneSide {
+    requestRx: setup.requestRx,
+    responseTx: setup.responseTx
+  }.run(cache)
 }
 
 /// Legacy Command-based clone entry (kept for compatibility).
