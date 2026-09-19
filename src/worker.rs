@@ -14,6 +14,7 @@ use std::any::Any;
 use std::cell::Cell;
 use std::ffi::c_void;
 use std::sync::OnceLock;
+use crate::platform::low;
 // =================================================================================================
 
 /// Callback registry inside the clone (not parent).
@@ -465,8 +466,8 @@ fn invokeFFI(
   // invokeAtPointer — gets a chance to touch this clone's state.
   if readErrno
   {
-    LastErrno.set(Some(crate::sys::readErrno()));
-    LastOsError.set(crate::sys::readOsError());
+    LastErrno.set(Some(low::readErrno()));
+    LastOsError.set(low::readOsError());
   }
 
   Ok(result)
@@ -659,7 +660,7 @@ pub fn executeFFI(
       executeCallPointer(pointer, args, resultType, readErrno),
 
     FFIRequest::Alloc { length } => {
-      let ptr: *mut c_void = crate::sys::allocate(length);
+      let ptr: *mut c_void = low::allocate(length);
       if ptr.is_null() { return Err(FFIError::Other("allocation returned null".to_string())); }
       Ok(Value::Pointer(ptr as usize))
     }
@@ -669,7 +670,7 @@ pub fn executeFFI(
       // on — `size` here is the one this shape actually needs on this ABI,
       // not a hand-computed (and easily wrong) guess from the caller.
       let (_offsets, size): (Vec<usize>, usize) = structLayout(&fields)?;
-      let ptr: *mut c_void = crate::sys::allocate(size);
+      let ptr: *mut c_void = low::allocate(size);
       if ptr.is_null() { return Err(FFIError::Other("allocation returned null".to_string())); }
       // Bundles pointer + resolved size into one response — the caller
       // needs both (`AllocatedMemory` tracks its own length) and doesn't
@@ -680,21 +681,21 @@ pub fn executeFFI(
     FFIRequest::AllocAligned { length, alignment } => {
       // posix_memalign / _aligned_malloc both require at least a pointer's worth
       let align: usize =
-        if alignment < crate::sys::MinAlignment { crate::sys::MinAlignment } else { alignment };
+        if alignment < low::MinAlignment { low::MinAlignment } else { alignment };
 
       // alignment must be a power of 2 (and non-zero)
       if !align.is_power_of_two() {
         return Err(FFIError::Other("AllocAligned: alignment must be a power of 2".to_string()));
       }
 
-      let ptr: *mut c_void = crate::sys::allocateAligned(length, align)
+      let ptr: *mut c_void = low::allocateAligned(length, align)
         .map_err(FFIError::Other)?;
       //
       Ok(Value::Pointer(ptr as usize))
     }
 
     FFIRequest::Free { pointer } => {
-      crate::sys::deallocate(pointer as *mut c_void);
+      low::deallocate(pointer as *mut c_void);
       Ok(Value::None)
     }
 

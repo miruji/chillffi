@@ -5,11 +5,11 @@
 //! / GetNamedPipeServerProcessId path breaks). Clone data IPC therefore
 //! uses plain named pipes addressed by name — no handle passing.
 // =================================================================================================
-use crate::sys::ProcessId;
 use std::ffi::c_void;
 #[cfg(target_arch = "x86_64")]
 use std::path::PathBuf;
 use std::ptr;
+use crate::platform::low;
 // =================================================================================================
 
 /// todo desc
@@ -372,7 +372,7 @@ unsafe extern "C"
 pub const fn ignoreChildExits() -> () {}
 
 /// todo desc
-pub fn killProcess(pid: ProcessId) -> ()
+pub fn killProcess(pid: low::ProcessId) -> ()
 {
   let process: Handle = unsafe { OpenProcess(ProcessTerminate, 0, pid) };
   if process.is_null() {
@@ -383,7 +383,7 @@ pub fn killProcess(pid: ProcessId) -> ()
 }
 
 /// todo desc
-pub fn waitProcess(pid: ProcessId) -> ()
+pub fn waitProcess(pid: low::ProcessId) -> ()
 {
   let process: Handle = unsafe{ OpenProcess(Synchronize, 0, pid) };
   if process.is_null() {
@@ -428,7 +428,7 @@ pub fn closeHandle(h: Handle) -> ()
 pub struct CloneResult
 {
   /// todo desc
-  pub pid: ProcessId,
+  pub pid: low::ProcessId,
   
   /// todo desc
   pub processHandle: Handle,
@@ -1180,7 +1180,7 @@ pub fn readOsError() -> Option<u32>
 // =================================================================================================
 
 /// todo desc
-const MallocAlignment: usize = crate::sys::MinAlignment * 2;
+const MallocAlignment: usize = low::MinAlignment * 2;
 
 thread_local!{
   /// todo desc

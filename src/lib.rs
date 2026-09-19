@@ -154,16 +154,16 @@
 
 /// Used for running tests.
 #[cfg(test)]
-mod platform 
+mod examplesPlatform 
 {
   include!(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/platform/mod.rs"));
 }
 
 // =================================================================================================
 
-mod sys;
 mod worker;
 mod zygote;
+mod platform;
 pub mod ffi;
 pub mod pathResolver;
 pub mod errnoPolicy;
@@ -171,9 +171,11 @@ pub mod errnoPolicy;
 // =================================================================================================
 
 use std::{env};
-#[cfg(windows)]
-use crate::zygote::{runAsClone, CloneFlag};
 use crate::zygote::{initZygote, runAsZygote, ZygoteFlag};
+#[cfg(windows)]
+use crate::platform::ipc::windows::CloneFlag;
+#[cfg(windows)]
+use crate::zygote::{runAsClone};
 
 // =================================================================================================
 
@@ -208,7 +210,8 @@ fn zygoteEntrypoint() -> ()
 /// Internal items re-exported for the [`ffi!`] macro.  
 /// Not part of the public API; do not use directly.
 #[doc(hidden)]
-pub mod __ffiInternal {
+pub mod __ffiInternal 
+{
   pub use crate::zygote::{ClonedZygote, ZygoteGuard};
 }
 

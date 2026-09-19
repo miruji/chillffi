@@ -1,4 +1,5 @@
 use crate::ffi::callback::Type;
+use crate::platform::low;
 use fxhash::FxHasher;
 use std::hash::Hash;
 use std::hash::Hasher;
@@ -8,7 +9,7 @@ use std::hash::Hasher;
 #[doc(hidden)]
 pub fn moduleBase() -> usize
 {
-  crate::sys::moduleBase()
+  low::moduleBase()
 }
 
 /// Turns an absolute function pointer (in *this* process) into an offset.

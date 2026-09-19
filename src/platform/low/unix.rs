@@ -1,25 +1,29 @@
-//! Unix implementation of the [`crate::sys`] layer.
+//! Unix implementation of the [`low`] layer.
 // =================================================================================================
-use crate::sys::ProcessId;
 use std::ffi::c_void;
+use crate::platform::low;
 // =================================================================================================
 
 /// Lets the kernel reap terminated clones so the main zygote never
 /// accumulates zombies. Must only be called there — with SIGCHLD ignored
 /// in the Runtime, `waitpid` in `supervisorLoop` would fail with `ECHILD`.
+///
+/// Linux has its own `SIGCHLD, SIG_IGN` call inside `platform::ipc::linux`,
+/// so this stays macOS-only.
+#[cfg(target_os = "macos")]
 pub fn ignoreChildExits() -> ()
 {
   unsafe{ libc::signal(libc::SIGCHLD, libc::SIG_IGN); }
 }
 
 /// A clone is a crash domain, not a cooperating peer — kill it outright.
-pub fn killProcess(pid: ProcessId) -> ()
+pub fn killProcess(pid: low::ProcessId) -> ()
 {
   unsafe{ libc::kill(pid as libc::pid_t, libc::SIGKILL); }
 }
 
 /// Blocks until the process terminates.
-pub fn waitProcess(pid: ProcessId) -> ()
+pub fn waitProcess(pid: low::ProcessId) -> ()
 {
   unsafe{ libc::waitpid(pid as libc::pid_t, std::ptr::null_mut(), 0); }
 }
@@ -64,7 +68,7 @@ pub fn allocate(length: usize) -> *mut c_void
 }
 
 /// `posix_memalign`. `alignment` is already normalized to a power of two
-/// no smaller than [`crate::sys::MinAlignment`].
+/// no smaller than [`low::MinAlignment`].
 pub fn allocateAligned(length: usize, alignment: usize) -> Result<*mut c_void, String>
 {
   let mut pointer: *mut c_void = std::ptr::null_mut();

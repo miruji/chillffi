@@ -111,9 +111,12 @@ bytemuck = { version = "1.25.2", features = ["derive"] }
 # Zero-cost casting of POD types. Used for static repr structures
 # (readStruct<T>) to safely reinterpret raw bytes as typed structs.
 
+[target.'cfg(not(target_os = "linux"))'.dependencies]
 ipc-channel = "0.23.0"
-# Provides IPC channels for communication between processes.
-# Messages are serialized/deserialized via serde and transferred
+# Provides IPC channels for communication between processes on macOS (Mach
+# ports) and Windows (named-pipe name handshake between the clone and the
+# Runtime). On Linux the Transport is built directly on `libc` (UnixStream::pair
+# + SCM_RIGHTS) and does not need this dependency.
 
 # ======================================================================================================================
 
