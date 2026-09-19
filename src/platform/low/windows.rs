@@ -238,9 +238,6 @@ unsafe extern "system"
   fn GetCurrentProcess() -> Handle;
 }
 
-// Only needed for the x64 PDB strategy. On ARM64 there's nothing to link
-// to (would just be dead symbols), so the whole block is cfg-gated.
-#[cfg(target_arch = "x86_64")]
 #[link(name = "bcryptprimitives", kind = "raw-dylib")]
 unsafe extern "system"
 {
@@ -248,6 +245,9 @@ unsafe extern "system"
   fn ProcessPrng(data: *mut u8, length: usize) -> i32;
 }
 
+// Only needed for the x64 PDB strategy. On ARM64 there's nothing to link
+// to (would just be dead symbols), so the whole block is cfg-gated.
+#[cfg(target_arch = "x86_64")]
 #[link(name = "dbghelp")]
 unsafe extern "system"
 {
