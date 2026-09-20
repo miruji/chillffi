@@ -193,13 +193,11 @@ impl Drop for ZygoteGuard
 ///
 /// `main()` must call this as the first line if the first argument == [`ZygoteFlag`].
 ///
-/// On Linux the control plane arrives as `stdin`. On macOS / Windows the
-/// second argument is the `IpcOneShotServer` name — both are folded into a
-/// single `Option<String>` `flag` that the platform backend interprets.
+/// The second argument is the `IpcOneShotServer` name of the Runtime; it is
+/// passed to the platform backend as `flag`.
 pub fn runAsZygote() -> !
 {
-  // argv[2] is the bootstrap name on platforms that need it (macOS / Windows).
-  // Linux ignores it (control plane is `stdin`).
+  // argv[2] is the bootstrap name of the control plane.
   let flag: Option<String> = env::args().nth(2);
 
   <ipc::Transport as TransportTrait>::zygoteControlLoop(flag)

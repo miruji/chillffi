@@ -7,10 +7,6 @@ use crate::platform::low;
 /// Lets the kernel reap terminated clones so the main zygote never
 /// accumulates zombies. Must only be called there — with SIGCHLD ignored
 /// in the Runtime, `waitpid` in `supervisorLoop` would fail with `ECHILD`.
-///
-/// Linux has its own `SIGCHLD, SIG_IGN` call inside `platform::ipc::linux`,
-/// so this stays macOS-only.
-#[cfg(target_os = "macos")]
 pub fn ignoreChildExits() -> ()
 {
   unsafe{ libc::signal(libc::SIGCHLD, libc::SIG_IGN); }

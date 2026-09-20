@@ -3,18 +3,17 @@
 //! Each backend implements the same [`Transport`] trait, so [`crate::zygote`]
 //! stays platform-neutral:
 //!
-//! - **Linux**: [`self::linux`] — pure `libc`. Control plane over a `UnixStream`
-//!   inherited from `stdin`; data plane over `UnixStream::pair()` with the
-//!   clone's end handed to the Runtime via `SCM_RIGHTS`. No `ipc-channel`.
-//! - **macOS**: [`self::macos`] — `ipc-channel` (Mach ports under the hood).
-//! - **Windows**: [`self::windows`] — `RtlCloneUserProcess` + `ipc-channel`
-//!   (named pipes under the hood). The clone hands its channel ends straight
-//!   to the Runtime: `ipc-channel` caches the pid of the process it was first
-//!   used in, so a clone must not send handles to Main Zygote.
+//! - **Linux**: [`self::linux`] — `ipc-channel` (`SCM_RIGHTS` sockets under
+//!   the hood). `fork` inherits descriptors, so the data channels of a clone
+//!   are created before the fork and need no workaround.
+//! - **macOS**: [`self::macos`] — `ipc-channel` (Mach ports under the hood;
+//!   the data channels have to be created by the clone after the fork).
+//! - **Windows**: [`self::windows`] — named pipes (handles do not survive
+//!   `RtlCloneUserProcess`, so `ipc-channel` is only used to hand over pipe
+//!   names through the control channel).
 //!
 //! The IPC payload ([`FFIRequest`] / [`FFIResponse`]) is the same on every
-//! backend: `serde` + `bincode` on top of whatever byte stream the backend
-//! provides.
+//! backend: `serde` on top of whatever the backend transports.
 // =================================================================================================
 use crate::ffi::errors::FFIError;
 use crate::ffi::types::{Type, Value};
@@ -154,9 +153,11 @@ pub enum FFIResponse
 ///    gets back a control-plane handle.
 /// 2. [`zygoteControlLoop`](Transport::zygoteControlLoop) — Main Zygote runs
 ///    its command loop forever, servicing `SpawnClone` requests.
-/// 3. [`cloneEnter`](Transport::cloneEnter) — a freshly cloned process prepares
-///    its data endpoint and produces the [`Bootstrap`](Transport::Bootstrap)
-///    that will be forwarded through the control channel back to the Runtime.
+/// 3. [`cloneEnter`](Transport::cloneEnter) — optional: a freshly cloned
+///    process prepares its data endpoint and produces the
+///    [`Bootstrap`](Transport::Bootstrap) that will be forwarded through the
+///    control channel back to the Runtime. Backends whose clones get their
+///    endpoints by inheritance (Linux) do not have this step.
 /// 4. [`runtimeConnect`](Transport::runtimeConnect) — Runtime rebuilds the
 ///    data endpoint from the bootstrap it received.
 ///
@@ -201,8 +202,17 @@ pub trait Transport: 'static
   ///
   /// `flag`: the CLI argument the clone was launched with (matches
   /// [`zygoteControlLoop`](Transport::zygoteControlLoop)'s argument).
+  ///
+  /// Optional: backends whose clones inherit their endpoints from the
+  /// fork have nothing to prepare and keep this default.
   #[allow(dead_code)]
-  fn cloneEnter(flag: Option<String>) -> io::Result<(Self::CloneSide, Self::Bootstrap)>;
+  fn cloneEnter(_flag: Option<String>) -> io::Result<(Self::CloneSide, Self::Bootstrap)>
+  {
+    Err(io::Error::new(
+      io::ErrorKind::Unsupported,
+      "this backend does not enter clones: they inherit their endpoints"
+    ))
+  }
 
   /// In Runtime, after receiving [`Bootstrap`](Transport::Bootstrap) from
   /// the clone via the control channel: rebuilds the data endpoint.
