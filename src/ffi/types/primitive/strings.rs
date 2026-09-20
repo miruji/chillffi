@@ -107,7 +107,7 @@ fn extractStringBytes(value: Value) -> Result<Vec<u8>, FFIError>
   match value
   {
     Value::String(b) | Value::CString(b) | Value::RawString(b) => Ok(b),
-    _ => Err(FFIError::Other(format!("expected a string Value, got {:?}", value))),
+    _ => Err(FFIError::Other(format!("expected a string Value, got {:?}", value)))
   }
 }
 

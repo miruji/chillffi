@@ -749,7 +749,9 @@ mod tests
 
     let scopeDir: std::path::PathBuf = temp_dir().join("chillffiScopePriorityTest");
     fs::create_dir_all(&scopeDir).expect("create scope test dir");
-    let realSo = format!("{}{}", env!("CARGO_MANIFEST_DIR"), platformExt!("/examples/paths/libprint"));
+    let realSo: String = format!(
+      "{}{}", env!("CARGO_MANIFEST_DIR"), platformExt!("/examples/paths/libprint")
+    );
     fs::copy(realSo, scopeDir.join(libName))
       .expect("examples/paths must be built first (cargo build --examples / cargo test builds it too)");
 

@@ -1,6 +1,9 @@
-//! OS layer for process lifetime, module base address, `errno` and the
-//! raw allocator behind `Alloc`/`Free`. Everything above this module
-//! (`zygote`, `worker`, `ffi`) stays platform-neutral.
+//! A low-level platform-dependent layer for:
+//! - The lifetime of the process
+//! - The base address of the module,
+//! - `errno`,
+//! - The low-level allocator underlying `Alloc`/`Free`,
+//! - Other stuff.
 // =================================================================================================
 
 #[cfg(unix)]

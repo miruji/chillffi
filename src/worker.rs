@@ -591,7 +591,7 @@ fn writeFieldAt(ptr: usize, value: &Value, t: &Type) -> Result<(), FFIError>
     (Type::Pointer, Value::Pointer(v)) => unsafe{ *(ptr as *mut usize) = *v },
     _ => return Err(FFIError::Other(format!(
       "writeDynamicStruct: field type {:?} does not match value {:?}", t, value
-    ))),
+    )))
   }
   Ok(())
 }
@@ -613,7 +613,7 @@ fn writeStructAt(base: usize, fields: &[Type], values: &[Value]) -> Result<(), F
     {
       (Type::Struct(nestedFields), Value::Struct(nestedValues)) =>
         writeStructAt(base + offset, nestedFields, nestedValues)?,
-      _ => writeFieldAt(base + offset, value, field)?,
+      _ => writeFieldAt(base + offset, value, field)?
     }
   }
   Ok(())

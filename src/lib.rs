@@ -185,7 +185,7 @@ use crate::zygote::{runAsClone};
 #[ctor::ctor(unsafe)]
 fn zygoteEntrypoint() -> ()
 {
-  let mut args = env::args_os();
+  let mut args: env::ArgsOs = env::args_os();
   args.next();
   if let Some(arg) = args.next()
   {
@@ -241,13 +241,15 @@ macro_rules! ffi
       use $crate::ffi::library::Library;
  
       // Creating a clone-zygote from the main one
-      let zygote = $crate::__ffiInternal::ClonedZygote::getMeClone()?;
+      let zygote: $crate::__ffiInternal::ClonedZygote = 
+        $crate::__ffiInternal::ClonedZygote::getMeClone()?;
  
       // Registering the clone-zygote in the current thread's ZygoteStack
-      let _guard = $crate::__ffiInternal::ZygoteGuard::enter(zygote);
+      let _guard: $crate::__ffiInternal::ZygoteGuard = 
+        $crate::__ffiInternal::ZygoteGuard::enter(zygote);
  
       // ScopeGuard lives strictly within the boundaries of this block; $scopeName borrows it.
-      let _scopeGuard = $crate::ffi::scope::ScopeGuard::new();
+      let _scopeGuard: $crate::ffi::scope::ScopeGuard = $crate::ffi::scope::ScopeGuard::new();
       let $scopeName = $crate::ffi::scope::Scope::new(&_scopeGuard);
  
       // Executing the body

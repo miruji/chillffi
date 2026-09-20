@@ -38,7 +38,7 @@ impl<'g> AllocatedMemory<'g>
     Self {
       address,
       length,
-      _scope: PhantomData,
+      _scope: PhantomData
     }
   }
 

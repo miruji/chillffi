@@ -1,16 +1,7 @@
 //! Transport: platform-specific IPC between Runtime and Zygote (Clone).
 //!
 //! Each backend implements the same [`Transport`] trait, so [`crate::zygote`]
-//! stays platform-neutral:
-//!
-//! - **Linux**: [`self::linux`] — `ipc-channel` (`SCM_RIGHTS` sockets under
-//!   the hood). `fork` inherits descriptors, so the data channels of a clone
-//!   are created before the fork and need no workaround.
-//! - **macOS**: [`self::macos`] — `ipc-channel` (Mach ports under the hood;
-//!   the data channels have to be created by the clone after the fork).
-//! - **Windows**: [`self::windows`] — named pipes (handles do not survive
-//!   `RtlCloneUserProcess`, so `ipc-channel` is only used to hand over pipe
-//!   names through the control channel).
+//! stays platform-neutral.
 //!
 //! The IPC payload ([`FFIRequest`] / [`FFIResponse`]) is the same on every
 //! backend: `serde` on top of whatever the backend transports.
@@ -126,7 +117,7 @@ pub enum FFIRequest
     args: Vec<Value>,
     resultType: Type,
     readErrno: bool
-  },
+  }
 }
 
 /// Response to the request with the execution result or error.

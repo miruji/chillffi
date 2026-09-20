@@ -8,9 +8,7 @@
 //!    ([`supervisorLoop`]),
 //! 4. hands out clone handles to callers via [`ClonedZygote::getMeClone`].
 //!
-//! All IPC details — `fork`/`RtlCloneUserProcess`, sockets / Mach ports /
-//! named pipes, `SCM_RIGHTS`, `ipc-channel` — live behind the
-//! [`ipc::Transport`] trait.
+//! All IPC details are hidden behind the [`ipc::Transport`] trait.
 // =================================================================================================
 pub use crate::platform::ipc::{FFIRequest, FFIResponse, ZygoteFlag};
 use crate::platform::ipc::{RuntimeSide as RuntimeSideTrait, Transport as TransportTrait};
@@ -32,6 +30,7 @@ use crate::platform::ipc::windows as ipc;
 
 #[cfg(windows)]
 pub use crate::platform::ipc::windows::runAsClone;
+
 // =================================================================================================
 
 /* todo
@@ -291,7 +290,7 @@ mod tests
   {
     let result: Result<(), FFIError> = ffi!(|scope| {
       scope.addSearchPath("examples/isolation");
-      let lib = scope.load(platformExt!("libcrash"))?;
+      let lib: Library = scope.load(platformExt!("libcrash"))?;
       lib.call("triggerSegfault").void()
     });
 
@@ -309,7 +308,7 @@ mod tests
   {
     let result: Result<(), FFIError> = ffi!(|scope| {
       scope.addSearchPath("examples/isolation");
-      let lib = scope.load(platformExt!("libcrash"))?;
+      let lib: Library = scope.load(platformExt!("libcrash"))?;
       lib.call("triggerAbort").void()
     });
 
@@ -331,13 +330,13 @@ mod tests
   {
     let crashed: Result<(), FFIError> = ffi!(|scope| {
       scope.addSearchPath("examples/isolation");
-      let lib = scope.load(platformExt!("libcrash"))?;
+      let lib: Library = scope.load(platformExt!("libcrash"))?;
       lib.call("triggerAbort").void()
     });
     assert!(crashed.is_err(), "sanity check: the setup call should have crashed");
 
     let result: f64 = ffi!(|scope| {
-      let libm = scope.load(LibmPath)?;
+      let libm: Library = scope.load(LibmPath)?;
       libm.call("sqrt").arg::<f64>(16.0).result()
     })
     .expect("runtime should survive a crashed clone");
@@ -360,7 +359,7 @@ mod tests
     for i in 0..Iterations
     {
       let result: f64 = ffi!(|scope| {
-        let libm = scope.load(LibmPath)?;
+        let libm: Library = scope.load(LibmPath)?;
         libm.call("sqrt").arg::<f64>(4.0).result()
       })
       .unwrap_or_else(|e| {
@@ -394,7 +393,7 @@ mod tests
           for i in 0..PerThread
           {
             let result: f64 = ffi!(|scope| {
-              let libm = scope.load(LibmPath)?;
+              let libm: Library = scope.load(LibmPath)?;
               libm.call("sqrt").arg::<f64>(4.0).result()
             })
             .unwrap_or_else(|e| {

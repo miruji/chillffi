@@ -204,7 +204,8 @@ macro_rules! callback
           // raw bit-copy (see `Sendable::fromClosure`) and is read back the
           // same way. Sound only because `F: Copy` (no Drop to double-run)
           // and both ends are the same compiled binary (identical layout).
-          if bytes.len() != size_of::<F>() {
+          if bytes.len() != size_of::<F>() 
+          {
             return ::std::result::Result::Err(
               $crate::ffi::callback::CallError::Decode(::std::format!(
                 "callback state size mismatch: expected {} bytes, got {}",

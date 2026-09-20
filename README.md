@@ -37,7 +37,7 @@ keeping your main Rust application running.
 | Callbacks                | ✅ Passing closures as C functions (`callback!`).                                                 |
 | Signals                  | ✅ Working with signals and calling pointers (`callvPointer`, `callPointer`).                     |
 | Errno Policy             | ✅ Configuring errno reading at the call, scope, or global level.                                 |
-| String data types        | String (`""`), CString (`c""`), RawString (`b""`).                                               |
+| String data types        | ✅ String (`""`), CString (`c""`), RawString (`b""`).                                             |
 | Sandbox (FS protection)  | ⏳ [#45](https://github.com/rts-lang/chillffi/issues/45)                                          |
 | Libraries from bytes     | ⏳ [#42](https://github.com/rts-lang/chillffi/issues/42)                                          |
 
