@@ -1,14 +1,16 @@
-//! Windows sys layer + named-pipe data channel for zygote clones.
+//! Windows low layer for zygote clones.
 //!
-//! RtlCloneUserProcess does CoW cloning. ipc-channel cannot transfer
-//! IpcSender/IpcReceiver handles across a cloned process (DuplicateHandle
-//! / GetNamedPipeServerProcessId path breaks). Clone data IPC therefore
-//! uses plain named pipes addressed by name — no handle passing.
+//! `RtlCloneUserProcess` does CoW cloning: the clone gets a copy of the memory
+//! of Main Zygote and an *empty* handle table. Everything the clone needs from
+//! the OS (CSRSS connection, IPC channels) is therefore created again inside
+//! it — see `reconnectCsr` here and `cloneBootstrapLoop` in `ipc::windows`.
 // =================================================================================================
 use std::ffi::c_void;
 #[cfg(target_arch = "x86_64")]
 use std::path::PathBuf;
 use std::ptr;
+use std::sync::{Mutex, PoisonError};
+use std::time::{SystemTime, UNIX_EPOCH};
 use crate::platform::low;
 // =================================================================================================
 
@@ -35,28 +37,13 @@ const ModuleHandleFromAddress: u32 = 0x0002 | 0x0004;
 // =================================================================================================
 
 /// todo desc
-const PipeAccessDuplex: u32 = 0x00000003;
+const ProcessQueryLimitedInformation: u32 = 0x1000;
 
-/// todo desc
-const PipeTypeByte: u32 = 0x00000000;
+/// `GetExitCodeProcess` reports this while the process is still running.
+const StillActive: u32 = 259;
 
-/// todo desc
-const PipeWait: u32 = 0x00000000;
-
-/// todo desc
-const PipeReadmodeByte: u32 = 0x00000000;
-
-/// todo desc
-const GenericRead: u32 = 0x80000000;
-
-/// todo desc
-const GenericWrite: u32 = 0x40000000;
-
-/// todo desc
-const OpenExisting: u32 = 3;
-
-/// todo desc
-const FileAttributeNormal: u32 = 0x80;
+/// `OpenProcess` fails with this for a pid that no longer exists.
+const ErrorInvalidParameter: u32 = 87;
 
 // =================================================================================================
 
@@ -243,61 +230,19 @@ unsafe extern "system"
   fn ProcessIdToSessionId(processId: u32, sessionId: *mut u32) -> i32;
 
   /// todo desc
-  fn CreateNamedPipeW(
-    lpName: *const u16,
-    dwOpenMode: u32,
-    dwPipeMode: u32,
-    nMaxInstances: u32,
-    nOutBufferSize: u32,
-    nInBufferSize: u32,
-    nDefaultTimeOut: u32,
-    lpSecurityAttributes: *mut c_void
-  ) -> Handle;
+  fn GetExitCodeProcess(process: Handle, exitCode: *mut u32) -> i32;
 
-  /// todo desc
-  fn ConnectNamedPipe(hNamedPipe: Handle, lpOverlapped: *mut c_void) -> i32;
-
-  /// todo desc
-  fn CreateFileW(
-    lpFileName: *const u16,
-    dwDesiredAccess: u32,
-    dwShareMode: u32,
-    lpSecurityAttributes: *mut c_void,
-    dwCreationDisposition: u32,
-    dwFlagsAndAttributes: u32,
-    hTemplateFile: Handle
-  ) -> Handle;
-  
-  /// todo desc
-  fn ReadFile(
-    hFile: Handle,
-    lpBuffer: *mut u8,
-    nNumberOfBytesToRead: u32,
-    lpNumberOfBytesRead: *mut u32,
-    lpOverlapped: *mut c_void
-  ) -> i32;
-  
-  /// todo desc
-  fn WriteFile(
-    hFile: Handle,
-    lpBuffer: *const u8,
-    nNumberOfBytesToWrite: u32,
-    lpNumberOfBytesWritten: *mut u32,
-    lpOverlapped: *mut c_void
-  ) -> i32;
-  
-  /// todo desc
-  fn SetNamedPipeHandleState(
-    hNamedPipe: Handle,
-    lpMode: *mut u32,
-    lpMaxCollectionCount: *mut u32,
-    lpCollectDataTimeout: *mut u32
-  ) -> i32;
-  
   // Only used by the x64 PDB strategy in resolveCsrBlockViaPdb.
   /// todo desc
   #[cfg(target_arch = "x86_64")]
   fn GetCurrentProcess() -> Handle;
+}
+
+#[link(name = "bcryptprimitives", kind = "raw-dylib")]
+unsafe extern "system"
+{
+  /// The system per-processor PRNG (what `getrandom` / `Uuid::new_v4` end up in).
+  fn ProcessPrng(data: *mut u8, length: usize) -> i32;
 }
 
 // Only needed for the x64 PDB strategy. On ARM64 there's nothing to link
@@ -393,6 +338,42 @@ pub fn waitProcess(pid: low::ProcessId) -> ()
   unsafe{ CloseHandle(process) };
 }
 
+/// Makes the RNG stream of a fresh clone differ from those of its siblings.
+///
+/// A clone starts with a copy of the memory of Main Zygote, and the RNG
+/// behind `Uuid::new_v4` (`ProcessPrng`) keeps its state there: clones taken
+/// from the same Main Zygote then draw the *same* UUIDs, i.e. the same
+/// `ipc-channel` pipe names. Skipping a pid/time dependent amount of output
+/// puts every clone at its own place in the stream (up to 1 MiB, well below a
+/// millisecond).
+pub fn decorrelateRandom() -> ()
+{
+  let nanos: u32 = SystemTime::now()
+    .duration_since(UNIX_EPOCH)
+    .map_or(0, |elapsed| elapsed.subsec_nanos());
+  let mixed: u32 = nanos ^ currentProcessId().wrapping_mul(0x9E37_79B1);
+  let length: usize = (mixed & 0xFFFF) as usize * 16 + 16;
+
+  let mut skipped: Vec<u8> = vec![0u8; length];
+  unsafe{ ProcessPrng(skipped.as_mut_ptr(), skipped.len()) };
+}
+
+/// Exit code of a process that has terminated; `None` while it is running.
+///
+/// A pid that cannot be opened any more (`ERROR_INVALID_PARAMETER`) is a
+/// process that is gone: `Some(u32::MAX)`.
+pub fn processExitCode(pid: low::ProcessId) -> Option<u32>
+{
+  let process: Handle = unsafe{ OpenProcess(ProcessQueryLimitedInformation, 0, pid) };
+  if process.is_null() {
+    return if unsafe{ GetLastError() } == ErrorInvalidParameter { Some(u32::MAX) } else { None };
+  }
+  let mut code: u32 = 0;
+  let ok: i32 = unsafe{ GetExitCodeProcess(process, &mut code) };
+  unsafe{ CloseHandle(process) };
+  if ok != 0 && code != StillActive { Some(code) } else { None }
+}
+
 /// todo desc
 pub fn silenceCrashReporting() -> ()
 {
@@ -473,186 +454,31 @@ pub fn cloneProcess() -> Result<CloneResult, i32>
   })
 }
 
-/// todo desc
+/// Process handles of the most recent clones, kept open by Main Zygote.
+///
+/// A process object lives exactly as long as somebody holds a handle to it.
+/// Without this, a clone that dies right after `RtlCloneUserProcess` is gone
+/// before the Runtime can ask why (`OpenProcess` fails with
+/// `ERROR_INVALID_PARAMETER`); with it, `processExitCode` still has the answer.
+/// Handles are stored as `usize`: a raw pointer is not `Send`.
+static RecentCloneProcesses: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+
+/// How many clone process handles Main Zygote keeps.
+const RecentCloneProcessesLimit: usize = 256;
+
+/// Called by Main Zygote after a successful `cloneProcess()`.
+///
+/// The thread handle is closed at once; the process handle is kept (see
+/// [`RecentCloneProcesses`]) and only the oldest one is closed to make room.
 pub fn closeCloneHandles(result: &CloneResult) -> ()
 {
-  closeHandle(result.processHandle);
   closeHandle(result.threadHandle);
-}
 
-// =================================================================================================
-// Named-pipe framed channel (length-prefixed messages). No handle passing.
-// =================================================================================================
-
-/// todo desc
-fn toWide(s: &str) -> Vec<u16>
-{
-  s.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
-/// Unique pipe path for clone data IPC (one duplex pipe per clone).
-pub fn cloneDataPipeName(clonePid: u32) -> String
-{
-  format!(r"\\.\pipe\chillffi-data-{}", clonePid) // todo Тут стоит подумать над этим хардкорным названием
-}
-
-/// Child side: create a duplex named-pipe server (does not wait for client yet).
-pub fn createPipeServer(name: &str) -> Option<Handle>
-{
-  let wide: Vec<u16> = toWide(name);
-  let h: Handle = unsafe{
-    CreateNamedPipeW(
-      wide.as_ptr(),
-      PipeAccessDuplex,
-      PipeTypeByte | PipeReadmodeByte | PipeWait,
-      1,
-      64 * 1024,
-      64 * 1024,
-      5000,
-      ptr::null_mut()
-    )
-  };
-  if h.is_null() || h as isize == -1 {
-    return None;
+  let mut recent = RecentCloneProcesses.lock().unwrap_or_else(PoisonError::into_inner);
+  recent.push(result.processHandle as usize);
+  if recent.len() > RecentCloneProcessesLimit {
+    closeHandle(recent.remove(0) as Handle);
   }
-  Some(h)
-}
-
-/// Block until a client connects to a pipe created with [`createPipeServer`].
-pub fn acceptPipeClient(h: Handle) -> bool
-{
-  let ok: i32 = unsafe{ ConnectNamedPipe(h, ptr::null_mut()) };
-  if ok == 0 {
-    let err: u32 = unsafe{ GetLastError() };
-    // ERROR_PIPE_CONNECTED == 535
-    return err == 535;
-  }
-  true
-}
-
-/// Parent/Runtime side: connect to an existing named-pipe server.
-pub fn connectPipeClient(name: &str) -> Option<Handle>
-{
-  let wide: Vec<u16> = toWide(name);
-  // Retry a few times — child may still be creating the server.
-  for _ in 0..50 
-  {
-    let h: Handle = unsafe{
-      CreateFileW(
-        wide.as_ptr(),
-        GenericRead | GenericWrite,
-        0,
-        ptr::null_mut(),
-        OpenExisting,
-        FileAttributeNormal,
-        ptr::null_mut()
-      )
-    };
-    if !h.is_null() && h as isize != -1 {
-      // Ensure byte mode on the client end (matches server PIPE_READMODE_BYTE).
-      let mut mode: u32 = PipeReadmodeByte;
-      unsafe{
-        SetNamedPipeHandleState(h, &mut mode, ptr::null_mut(), ptr::null_mut());
-      }
-      return Some(h);
-    }
-    std::thread::sleep(std::time::Duration::from_millis(10));
-  }
-  None
-}
-
-/// todo desc
-fn writeAll(h: Handle, buf: &[u8]) -> bool
-{
-  // Empty payload is valid (e.g. length prefix of a zero-byte body).
-  if buf.is_empty() {
-    return true;
-  }
-  let mut off: usize = 0;
-  while off < buf.len() 
-  {
-    let mut written: u32 = 0;
-    let ok: i32 = unsafe{
-      WriteFile(
-        h,
-        buf[off..].as_ptr(),
-        (buf.len() - off) as u32,
-        &mut written,
-        ptr::null_mut()
-      )
-    };
-    if ok == 0 || written == 0 {
-      return false;
-    }
-    off += written as usize;
-  }
-  // Do NOT FlushFileBuffers on named pipes: it can block until the peer
-  // reads, and with request/response on two pipes that risks deadlock.
-  true
-}
-
-/// todo desc
-fn readExact(h: Handle, buf: &mut [u8]) -> bool
-{
-  let mut off: usize = 0;
-  while off < buf.len() 
-  {
-    let mut read: u32 = 0;
-    let ok: i32 = unsafe{
-      ReadFile(
-        h,
-        buf[off..].as_mut_ptr(),
-        (buf.len() - off) as u32,
-        &mut read,
-        ptr::null_mut(),
-      )
-    };
-    if ok == 0 || read == 0 {
-      return false;
-    }
-    off += read as usize;
-  }
-  true
-}
-
-/// Send a length-prefixed payload (u32 LE length + bytes) in **one** WriteFile
-/// sequence so the peer never observes a torn frame.
-pub fn pipeSend(h: Handle, payload: &[u8]) -> bool
-{
-  if payload.len() > u32::MAX as usize {
-    return false;
-  }
-  let mut msg: Vec<u8> = Vec::with_capacity(4 + payload.len());
-  msg.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-  msg.extend_from_slice(payload);
-  writeAll(h, &msg)
-}
-
-/// Receive a length-prefixed payload.
-/// On failure returns None; call [`lastPipeError`] for the Win32 code.
-pub fn pipeRecv(h: Handle) -> Option<Vec<u8>>
-{
-  let mut lenBuf: [u8; 4] = [0u8; 4];
-  if !readExact(h, &mut lenBuf) {
-    return None;
-  }
-  
-  let len: usize = u32::from_le_bytes(lenBuf) as usize;
-  // Sanity cap: 16 MiB
-  if len > 16 * 1024 * 1024 {
-    return None;
-  }
-  let mut buf = vec![0u8; len];
-  if len > 0 && !readExact(h, &mut buf) {
-    return None;
-  }
-  Some(buf)
-}
-
-/// Last `GetLastError` after a failed pipe op (best-effort).
-pub fn lastPipeError() -> u32
-{
-  unsafe{ GetLastError() }
 }
 
 // =================================================================================================

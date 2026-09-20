@@ -7,9 +7,10 @@
 //!   inherited from `stdin`; data plane over `UnixStream::pair()` with the
 //!   clone's end handed to the Runtime via `SCM_RIGHTS`. No `ipc-channel`.
 //! - **macOS**: [`self::macos`] — `ipc-channel` (Mach ports under the hood).
-//! - **Windows**: [`self::windows`] — named pipes (handles do not survive
-//!   `RtlCloneUserProcess`, so `ipc-channel` is only used to hand over pipe
-//!   names through the control channel).
+//! - **Windows**: [`self::windows`] — `RtlCloneUserProcess` + `ipc-channel`
+//!   (named pipes under the hood). The clone hands its channel ends straight
+//!   to the Runtime: `ipc-channel` caches the pid of the process it was first
+//!   used in, so a clone must not send handles to Main Zygote.
 //!
 //! The IPC payload ([`FFIRequest`] / [`FFIResponse`]) is the same on every
 //! backend: `serde` + `bincode` on top of whatever byte stream the backend
