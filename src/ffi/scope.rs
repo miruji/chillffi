@@ -402,7 +402,7 @@ impl<'g> Scope<'g>
 
 impl<'g> Drop for Scope<'g>
 {
-  /// todo desc
+  /// Pops this scope from the thread-local ScopeStack.
   fn drop(&mut self) -> ()
   {
     ScopeStack.with(|s| { s.borrow_mut().pop() });

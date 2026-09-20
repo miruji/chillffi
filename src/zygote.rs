@@ -64,7 +64,7 @@ pub use crate::platform::ipc::windows::runAsClone;
 /// the child process — its `Drop` calls `process.kill()`).
 pub struct ZygoteHandle
 {
-  /// todo desc
+  /// Platform-specific handle to the Main Zygote.
   pub inner: ipc::ZygoteHandle
 }
 

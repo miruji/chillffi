@@ -67,10 +67,10 @@ pub enum ZygoteReply
 #[derive(Serialize, Deserialize)]
 struct BootstrapToRuntime
 {
-  /// todo desc
+  /// Runtime → Main Zygote commands.
   commandTx: IpcSender<ZygoteCommand>,
 
-  /// todo desc
+  /// Main Zygote → Runtime replies.
   replyRx: IpcReceiver<ZygoteReply>
 }
 
@@ -78,10 +78,10 @@ struct BootstrapToRuntime
 #[derive(Serialize, Deserialize)]
 struct CloneBootstrap
 {
-  /// todo desc
+  /// Runtime → Clone requests (sent back to Main Zygote).
   requestTx: IpcSender<FFIRequest>,
-  
-  /// todo desc
+
+  /// Clone → Runtime responses (sent back to Main Zygote).
   responseRx: IpcReceiver<FFIResponse>
 }
 
@@ -123,18 +123,17 @@ pub struct CloneSide
   pub responseTx: IpcSender<FFIResponse>
 }
 
-/// Bootstrap carried through the control channel from a freshly cloned
-/// process back to the Runtime.
+/// Clone spawn result: pid and Runtime-side data channel ends.
 #[derive(Serialize, Deserialize)]
 pub struct Bootstrap
 {
-  /// todo desc
+  /// PID of the freshly created clone.
   pub pid: u32,
-  
-  /// todo desc
+
+  /// Runtime → Clone requests.
   pub requestTx: IpcSender<FFIRequest>,
-  
-  /// todo desc
+
+  /// Clone → Runtime responses.
   pub responseRx: IpcReceiver<FFIResponse>
 }
 
@@ -223,7 +222,7 @@ impl TransportTrait for Transport
     }
   }
 
-  /// todo desc
+  /// PID stored in the bootstrap message.
   fn bootstrapPid(bootstrap: &Self::Bootstrap) -> u32
   {
     bootstrap.pid
@@ -249,7 +248,7 @@ impl TransportTrait for Transport
     cloneBootstrapLoop(serverName)
   }
 
-  /// todo desc
+  /// Turns a bootstrap message into a Runtime-side data endpoint.
   fn runtimeConnect(bootstrap: Self::Bootstrap) -> io::Result<Self::RuntimeSide>
   {
     Ok(RuntimeSide {
@@ -263,7 +262,7 @@ impl TransportTrait for Transport
 
 impl RuntimeSideTrait for RuntimeSide
 {
-  /// todo desc
+  /// Sends an FFI request to the clone.
   fn send(&self, request: &FFIRequest) -> Result<(), String>
   {
     self
@@ -272,7 +271,7 @@ impl RuntimeSideTrait for RuntimeSide
       .map_err(|e| format!("Zygote clone IPC failed while sending request: {e}"))
   }
 
-  /// todo desc
+  /// Receives an FFI response from the clone.
   fn recv(&self) -> Result<FFIResponse, String>
   {
     self

@@ -33,8 +33,8 @@ impl ErasedCallable
     }
   }
 
-  /// Invokes the erased closure with dynamic arguments and returns the
-  /// dynamic result.
+  /// Invokes the erased closure with dynamic arguments 
+  /// and returns the dynamic result.
   pub(crate) fn call(&self, args: DynamicList) -> Value
   {
     self.inner.call(args)
@@ -59,7 +59,7 @@ struct StateFnAdapter<State: Send + 'static, Output: Primitive + 'static>
 impl<State: Send + 'static, Output: FfiPrimitive + 'static>
 Callable<DynamicList, Value> for StateFnAdapter<State, Output>
 {
-  /// todo desc
+  /// Invokes the typed entry point and converts the result to a Value.
   fn call(&self, args: DynamicList) -> Value
   {
     (self.typedFn)(&self.state, &args).toFfiValue().0

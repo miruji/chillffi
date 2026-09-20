@@ -149,6 +149,19 @@
 //!
 //! The source code is distributed under the FCL license.
 //! See the repository for the full text.
+// =================================================================================================
+
+#[cfg(not(any(
+  all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"),
+  all(target_os = "linux", target_arch = "aarch64", target_env = "gnu"),
+
+  all(target_os = "macos", target_arch = "x86_64"),
+  all(target_os = "macos", target_arch = "aarch64"),
+
+  all(target_os = "windows", target_arch = "x86_64", target_env = "msvc"),
+  all(target_os = "windows", target_arch = "aarch64", target_env = "msvc"),
+)))]
+compile_error!("Unsupported platform or architecture");
 
 // =================================================================================================
 

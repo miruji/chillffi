@@ -47,15 +47,24 @@ keeping your main Rust application running.
 
 Add the dependency to `Cargo.toml`. There are no separate configuration flags.
 
-| Platforms            | Status                                                  |
-|----------------------|---------------------------------------------------------|
-| Linux                | ✅                                                       |
-| macOS                | ✅                                                       |
-| Windows (MSVC)       | ✅                                                       |
-| Windows (GNU)        | ❌ `libffi-sys` has no vendored build for this toolchain |
-| WASM                 | ⏳ [#43](https://github.com/rts-lang/chillffi/issues/43) |
-| Bare metal           | ⏳ [#44](https://github.com/rts-lang/chillffi/issues/44) |
-| Build as `cdylib`    | ❌                                                       |
+| Platforms         | Status                                                  |
+|-------------------|---------------------------------------------------------|
+| Linux             | ✅ Ubuntu 24.04 / 26.04 (x86_64 & ARM64)                 |
+| macOS             | ✅ macOS 15 / 26 (Intel & Apple Silicon)                 |
+| Windows (MSVC)    | ✅ Windows Server 2025 (x86_64) and Windows 11 ARM       |
+| Windows (GNU)     | ❌ `libffi-sys` has no vendored build for this toolchain |
+| WASM              | ⏳ [#43](https://github.com/rts-lang/chillffi/issues/43) |
+| Bare metal        | ⏳ [#44](https://github.com/rts-lang/chillffi/issues/44) |
+| Build as `cdylib` | ❌                                                       |
+
+> **Supported architectures only:** `x86_64` and `aarch64` on the platforms above.
+> Other architectures (e.g. `x86`, `arm`, `riscv64`, …) are not supported.
+>
+> 32-bit is not supported because the framework targets only 64-bit and
+> modern architectures — they can be checked and are used more widely.
+>
+> All because verification is done through GitHub CI, and there are no other platforms there.
+> If you need other platforms — that is separate work and research.
 
 ## 🚀 Quick Start
 

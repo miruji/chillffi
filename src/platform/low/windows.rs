@@ -14,29 +14,29 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::platform::low;
 // =================================================================================================
 
-/// todo desc
+/// Opaque Win32 handle (`HANDLE`).
 pub type Handle = *mut c_void;
 
 // =================================================================================================
 
-/// todo desc
+/// `PROCESS_TERMINATE` access right.
 const ProcessTerminate: u32 = 0x0001;
 
-/// todo desc
+/// `SYNCHRONIZE` access right.
 const Synchronize: u32 = 0x0010_0000;
 
-/// todo desc
+/// `INFINITE` wait timeout.
 const Infinite: u32 = 0xFFFF_FFFF;
 
-/// todo desc
+/// Flags for `SetErrorMode` that suppress crash dialogs.
 const SilentErrorMode: u32 = 0x0001 | 0x0002 | 0x8000;
 
-/// todo desc
+/// `GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | UNCHANGED_REFCOUNT`.
 const ModuleHandleFromAddress: u32 = 0x0002 | 0x0004;
 
 // =================================================================================================
 
-/// todo desc
+/// `PROCESS_QUERY_LIMITED_INFORMATION` access right.
 const ProcessQueryLimitedInformation: u32 = 0x1000;
 
 /// `GetExitCodeProcess` reports this while the process is still running.
@@ -47,88 +47,89 @@ const ErrorInvalidParameter: u32 = 87;
 
 // =================================================================================================
 
-/// todo desc
+/// NTSTATUS returned to the child of `RtlCloneUserProcess`.
 pub const StatusProcessCloned: i32 = 0x00000129;
 
 // =================================================================================================
 
-/// todo desc
+/// `CLIENT_ID` (process + thread identifiers).
 #[repr(C)]
 pub struct ClietnID
 {
-  /// todo desc
+  /// Process handle / id.
   pub uniqueProcess: *mut c_void,
-  
-  /// todo desc
+
+  /// Thread handle / id.
   pub uniqueThread: *mut c_void
 }
 
-/// todo desc
+/// `SECTION_IMAGE_INFORMATION` from ntdll.
 #[repr(C)]
 pub struct SectionImageInformation
 {
-  /// todo desc
+  /// Preferred entry-point address of the image.
   pub TransferAddress: *mut c_void,
 
-  /// todo desc
+  /// Number of high zero bits in the preferred base.
   pub ZeroBits: usize,
 
-  /// todo desc
+  /// Maximum stack size for the primary thread.
   pub MaximumStackSize: usize,
 
-  /// todo desc
+  /// Initially committed stack size.
   pub CommittedStackSize: usize,
 
-  /// todo desc
+  /// Subsystem type (GUI / CUI / …).
   pub SubSystemType: u32,
 
-  /// todo desc
+  /// Subsystem version (major/minor packed).
   pub SubSystemVersion: u32,
 
-  /// todo desc
+  /// GP value for architectures that need it.
   pub GpValue: u32,
 
-  /// todo desc
+  /// PE image characteristics flags.
   pub ImageCharacteristics: u16,
 
-  /// todo desc
+  /// DLL characteristics flags.
   pub DllCharacteristics: u16,
 
-  /// todo desc
+  /// Machine architecture (IMAGE_FILE_MACHINE_*).
   pub Machine: u16,
 
-  /// todo desc
+  /// Non-zero if the image contains executable code.
   pub ImageContainsCode: u8,
 
-  /// todo desc
+  /// Loader image flags.
   pub ImageFlags: u8,
 
-  /// todo desc
+  /// Loader flags.
   pub LoaderFlags: u32,
 
-  /// todo desc
+  /// Size of the image file on disk.
   pub ImageFileSize: u32,
 
-  /// todo desc
+  /// PE checksum.
   pub CheckSum: u32
 }
 
+/// Result of RtlCloneUserProcess — process/thread handles and client id.
 #[repr(C)]
 pub struct RtlUserProcessInformation
 {
-  /// todo desc
+  /// Size of this structure in bytes.
   pub length: u32,
 
-  /// todo desc
+  /// Handle to the newly created process.
   pub processHandle: Handle,
 
-  /// todo desc
+  /// Handle to the primary thread of the clone.
   pub threadHandle: Handle,
 
-  /// todo desc
+  /// Client id of the clone (process + thread).
   pub clientId: ClietnID,
 
-  /// todo desc
+  /// Image information of the cloned process.
   pub imageInformation: SectionImageInformation
 }
 
@@ -139,101 +140,102 @@ pub struct RtlUserProcessInformation
 /// only one that compiles, so the struct is cfg-gated to avoid dead code.
 #[cfg(target_arch = "x86_64")]
 #[repr(C)]
-struct SymbolInfo 
+struct SymbolInfo
 {
-  /// todo desc
+  /// Size of the fixed part of SYMBOL_INFO (without Name).
   sizeOfStruct: u32,
-  
-  /// todo desc
+
+  /// Type index of the symbol.
   typeIndex: u32,
-  
-  /// todo desc
+
+  /// Reserved.
   reserved: [u64; 2],
-  
-  /// todo desc
+
+  /// Symbol index.
   index: u32,
-  
-  /// todo desc
+
+  /// Size of the symbol in bytes.
   size: u32,
-  
-  /// todo desc
+
+  /// Module base address.
   modBase: u64,
-  
-  /// todo desc
+
+  /// Symbol flags.
   flags: u32,
-  
-  /// todo desc
+
+  /// Value of the symbol (if applicable).
   value: u64,
-  
-  /// todo desc
+
+  /// Address of the symbol.
   address: u64,
-  
-  /// todo desc
+
+  /// Register (if the symbol lives in one).
   register: u32,
-  
-  /// todo desc
+
+  /// Scope of the symbol.
   scope: u32,
-  
-  /// todo desc
+
+  /// Symbol tag (SymTagEnum).
   tag: u32,
-  
-  /// todo desc
+
+  /// Length of the name that follows.
   nameLen: u32,
-  
-  /// todo desc
+
+  /// Capacity of the name buffer.
   maxNameLen: u32,
-  
-  /// todo desc
+
+  /// Null-terminated symbol name.
   name: [i8; 2000]
 }
 
 #[link(name = "kernel32")]
 unsafe extern "system"
 {
-  /// todo desc
+  /// Opens an existing process by pid.
   fn OpenProcess(desiredAccess: u32, inheritHandle: i32, processId: u32) -> Handle;
 
-  /// todo desc
+  /// Terminates the given process.
   fn TerminateProcess(process: Handle, exitCode: u32) -> i32;
 
-  /// todo desc
+  /// Waits until the object is signaled or the timeout expires.
   fn WaitForSingleObject(handle: Handle, milliseconds: u32) -> u32;
 
-  /// todo desc
+  /// Closes an open handle.
   fn CloseHandle(object: Handle) -> i32;
 
-  /// todo desc
+  /// Returns the last error code for the calling thread.
   fn GetLastError() -> u32;
 
-  /// todo desc
+  /// Sets the error mode of the current process.
   fn SetErrorMode(mode: u32) -> u32;
 
-  /// todo desc
+  /// Retrieves a module handle from an address inside it.
   fn GetModuleHandleExW(flags: u32, moduleName: *const u16, module: *mut Handle) -> i32;
 
-  /// todo desc
+  /// Retrieves a module handle by ANSI name.
   fn GetModuleHandleA(moduleName: *const u8) -> Handle;
 
-  /// todo desc
+  /// Resolves an exported function by name.
   fn GetProcAddress(module: Handle, name: *const u8) -> *mut c_void;
 
-  /// todo desc
+  /// Detaches the calling process from its console.
   fn FreeConsole() -> i32;
 
-  /// todo desc
+  /// Attaches the calling process to the console of another process.
   fn AttachConsole(dwProcessId: u32) -> i32;
 
-  /// todo desc
+  /// Returns the pid of the calling process.
   fn GetCurrentProcessId() -> u32;
 
-  /// todo desc
+  /// Maps a process id to a terminal session id.
   fn ProcessIdToSessionId(processId: u32, sessionId: *mut u32) -> i32;
 
-  /// todo desc
+  /// Retrieves the exit code of a process.
   fn GetExitCodeProcess(process: Handle, exitCode: *mut u32) -> i32;
-
-  // Only used by the x64 PDB strategy in resolveCsrBlockViaPdb.
-  /// todo desc
+  
+  /// Returns a pseudo-handle to the current process;
+  /// 
+  /// Only used by the x64 PDB strategy in `resolveCsrBlockViaPdb`.
   #[cfg(target_arch = "x86_64")]
   fn GetCurrentProcess() -> Handle;
 }
@@ -251,20 +253,20 @@ unsafe extern "system"
 #[link(name = "dbghelp")]
 unsafe extern "system"
 {
-  /// todo desc
+  /// Initializes the symbol handler for a process.
   fn SymInitializeW(hProcess: Handle, userSearchPath: *const u16, fInvadeProcess: i32) -> i32;
-  
-  /// todo desc
+
+  /// Looks up a symbol by name.
   fn SymFromName(hProcess: Handle, name: *const i8, symbol: *mut SymbolInfo) -> i32;
-  
-  /// todo desc
+
+  /// Releases resources allocated by the symbol handler.
   fn SymCleanup(hProcess: Handle) -> i32;
 }
 
 #[link(name = "ntdll")]
 unsafe extern "system"
 {
-  /// todo desc
+  /// Clones the current process via CoW (ntdll).
   fn RtlCloneUserProcess(
     processFlags: u32,
     processSecurityDescriptor: *mut c_void,
@@ -307,16 +309,16 @@ unsafe extern "system"
 
 unsafe extern "C"
 {
-  /// todo desc
+  /// Returns a pointer to the thread-local errno.
   fn _errno() -> *mut i32;
 }
 
 // =================================================================================================
 
-/// todo desc
+/// No-op on Windows (no SIGCHLD equivalent to ignore).
 pub const fn ignoreChildExits() -> () {}
 
-/// todo desc
+/// Terminates the process identified by `pid`.
 pub fn killProcess(pid: low::ProcessId) -> ()
 {
   let process: Handle = unsafe{ OpenProcess(ProcessTerminate, 0, pid) };
@@ -327,7 +329,7 @@ pub fn killProcess(pid: low::ProcessId) -> ()
   unsafe{ CloseHandle(process) };
 }
 
-/// todo desc
+/// Waits until the process identified by `pid` exits.
 pub fn waitProcess(pid: low::ProcessId) -> ()
 {
   let process: Handle = unsafe{ OpenProcess(Synchronize, 0, pid) };
@@ -374,13 +376,13 @@ pub fn processExitCode(pid: low::ProcessId) -> Option<u32>
   if ok != 0 && code != StillActive { Some(code) } else { None }
 }
 
-/// todo desc
+/// Suppresses Windows error / crash dialogs for this process.
 pub fn silenceCrashReporting() -> ()
 {
   unsafe{ SetErrorMode(SilentErrorMode) };
 }
 
-/// todo desc
+/// Detaches from the current console and attaches to the parent's.
 pub fn reattachConsole() -> ()
 {
   unsafe{
@@ -389,13 +391,13 @@ pub fn reattachConsole() -> ()
   }
 }
 
-/// todo desc
+/// Returns the pid of the calling process.
 pub fn currentProcessId() -> u32
 {
   unsafe{ GetCurrentProcessId() }
 }
 
-/// todo desc
+/// Closes a handle if it is non-null and not `INVALID_HANDLE_VALUE`.
 pub fn closeHandle(h: Handle) -> ()
 {
   if !h.is_null() && h as isize != -1 {
@@ -405,20 +407,20 @@ pub fn closeHandle(h: Handle) -> ()
 
 // =================================================================================================
 
-/// todo desc
+/// Result of a successful `RtlCloneUserProcess` call.
 pub struct CloneResult
 {
-  /// todo desc
+  /// Pid of the newly created clone.
   pub pid: low::ProcessId,
   
-  /// todo desc
+  /// Handle to the clone process.
   pub processHandle: Handle,
   
-  /// todo desc
+  /// Handle to the primary thread of the clone.
   pub threadHandle: Handle
 }
 
-/// todo desc
+/// Clones the current process via `RtlCloneUserProcess`.
 pub fn cloneProcess() -> Result<CloneResult, i32>
 {
   let mut info: RtlUserProcessInformation = unsafe{ std::mem::zeroed() };
@@ -569,14 +571,14 @@ const CsrBlockSize: usize = 0x80;
 ///   ...
 const CsrProcessIdOffset: usize = 0x20;
 
-/// todo desc
+/// Location and size of the CSR data block inside ntdll.
 #[derive(Clone, Copy)]
 struct CsrDataBlock
 {
-  /// todo desc
+  /// Base address of the CSR data block.
   base: usize,
   
-  /// todo desc
+  /// Size of the block in bytes.
   size: usize,
   
   /// kernelbase!CtrlRoutine address (passed as BASESRV ConnectionInfo).
@@ -586,7 +588,7 @@ struct CsrDataBlock
   ctrlRoutine: usize
 }
 
-/// todo desc
+/// Lazily resolved CSR data block of the current process.
 static CsrDataBlockAddress: std::sync::OnceLock<Option<CsrDataBlock>> =
   std::sync::OnceLock::new();
 
@@ -831,7 +833,7 @@ unsafe fn decodeCsrProcessIdLoad(fn_addr: usize) -> Option<usize>
   }
 }
 
-/// todo desc
+/// Locates the CSR data block (PDB or disassembly) and caches it.
 pub fn resolveCsrPortHandle() -> ()
 {
   CsrDataBlockAddress.get_or_init(|| {
@@ -975,7 +977,7 @@ pub fn reconnectCsr() -> bool
 
 // =================================================================================================
 
-/// todo desc
+/// Returns the base address of the module containing this function.
 pub fn moduleBase() -> usize
 {
   let mut module: Handle = ptr::null_mut();
@@ -992,13 +994,13 @@ pub fn moduleBase() -> usize
   module as usize
 }
 
-/// todo desc
+/// Reads the current thread's errno value.
 pub fn readErrno() -> i32
 {
   unsafe{ *_errno() }
 }
 
-/// todo desc
+/// Reads the last Win32 error for the calling thread.
 pub fn readOsError() -> Option<u32>
 {
   Some(unsafe{ GetLastError() })
@@ -1006,22 +1008,22 @@ pub fn readOsError() -> Option<u32>
 
 // =================================================================================================
 
-/// todo desc
+/// Alignment that plain `malloc` is assumed to guarantee.
 const MallocAlignment: usize = low::MinAlignment * 2;
 
 thread_local!{
-  /// todo desc
+  /// Tracks pointers obtained via `_aligned_malloc`.
   static AlignedAllocations: std::cell::RefCell<std::collections::HashSet<usize>> =
     std::cell::RefCell::new(std::collections::HashSet::new());
 }
 
-/// todo desc
+/// Allocates `length` bytes via `malloc`.
 pub fn allocate(length: usize) -> *mut c_void
 {
   unsafe{ libc::malloc(length) }
 }
 
-/// todo desc
+/// Allocates `length` bytes with the requested alignment.
 pub fn allocateAligned(length: usize, alignment: usize) -> Result<*mut c_void, String>
 {
   if alignment <= MallocAlignment {
@@ -1045,7 +1047,7 @@ pub fn allocateAligned(length: usize, alignment: usize) -> Result<*mut c_void, S
   Ok(pointer)
 }
 
-/// todo desc
+/// Frees a pointer previously returned by `allocate` / `allocateAligned`.
 pub fn deallocate(pointer: *mut c_void) -> ()
 {
   let wasAligned: bool =
