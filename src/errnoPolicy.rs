@@ -1,7 +1,11 @@
 //! Global default controlling whether FFI calls read `errno` right after
-//! they return. A scope-level override ([`Scope::setReadErrno`](crate::ffi::scope::Scope::setReadErrno))
-//! or a per-call override (`CallBuilder::errno`/`noErrno`, `Scope::callPointerErrno`)
-//! takes priority over this — see [`crate::ffi::library::resolveReadErrno`].
+//! they return.
+//! 
+//! Priority (most specific wins):
+//! 1. per-call override — [`crate::ffi::library::CallBuilder::errno`] / [`crate::ffi::library::CallBuilder::noErrno`]
+//!    or [`crate::ffi::scope::Scope::callPointerErrno`]
+//! 2. scope-level override — [`crate::ffi::scope::Scope::setReadErrno`]
+//! 3. this global default — [`setGlobalReadErrno`]
 // =================================================================================================
 use std::sync::atomic::{AtomicBool, Ordering};
 // =================================================================================================

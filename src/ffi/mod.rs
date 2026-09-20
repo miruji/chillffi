@@ -1,5 +1,4 @@
 //! Basis: [`Library`](library::Library),
-//! [`Value`](types::Value), [`Type`](types::Type),
 //! [`Scope`](scope::Scope),
 //! [`AllocatedMemory`](allocatedMemory::AllocatedMemory),
 //! and error types.

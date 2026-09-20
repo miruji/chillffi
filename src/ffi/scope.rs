@@ -75,7 +75,7 @@ pub(super) fn currentScopeReadErrno() -> Option<bool>
 
 // =================================================================================================
 
-/// A handle to the ScopeGuard of the current [`ffi!`]-block — borrows it for 'g.
+/// A handle to the ScopeGuard of the current [`crate::ffi!`]-block — borrows it for 'g.
 ///
 /// That is precisely why [`AllocatedMemory<'g>`] and [`Library<'g>`] cannot leave
 /// the block: the ScopeGuard, which they borrow, is dropped at the boundary of the
@@ -111,7 +111,7 @@ impl<'g> Scope<'g>
   // ===============================================================================================
 
   /// Overrides errno capture for every call made through this scope — see
-  /// [`FFIRequest::Call`]'s `readErrno` field for what capture actually means.
+  /// `FFIRequest::Call`'s `readErrno` field for what capture actually means.
   /// A per-call override (`.errno()`/`.noErrno()` on [`CallBuilder`](crate::ffi::library::CallBuilder))
   /// still takes priority over this; this in turn takes priority over the
   /// global default set via [`crate::errnoPolicy::setGlobalReadErrno`].
@@ -243,7 +243,7 @@ impl<'g> Scope<'g>
     value.try_into()
   }
 
-  /// Writes data from [`Value`] into the clone's memory at `pointer`.
+  /// Writes data from `Value` into the clone's memory at `pointer`.
   pub fn writeMemory(pointer: impl Into<usize>, value: impl FfiArg) -> Result<(), FFIError>
   {
     sendRawRequest(FFIRequest::WriteMemory {
@@ -376,7 +376,7 @@ impl<'g> Scope<'g>
 
   // ===============================================================================================
 
-  /// Registers a closure built with [`callback!`] as an FFI-callable function
+  /// Registers a closure built with [`crate::callback!`] as an FFI-callable function
   /// (e.g. a `qsort` comparator). Capture is automatic at the macro call site,
   /// this method only ships the already-built closure to the clone:
   pub fn callback(

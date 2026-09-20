@@ -5,8 +5,8 @@ use crate::ffi::callback::Value;
 use crate::ffi::types::primitive::FfiPrimitive;
 // =================================================================================================
 
-/// The type-erased, dynamically callable form of a [`callback!`] closure —
-/// what [`decode`] reconstructs inside the clone.
+/// The type-erased, dynamically callable form of a [`crate::callback!`] closure —
+/// what `decode` reconstructs inside the clone.
 pub struct ErasedCallable
 {
   /// Type-erased callable implementation.

@@ -18,8 +18,8 @@ use std::marker::PhantomData;
 /// To work with raw addresses allocated by the C side (for example, `strdup`),
 /// use the `Library` methods directly.
 ///
-/// `'g` is the lifetime of the ScopeGuard block of [`ffi!`] in which it was created.
-/// Until it is `'static` — the value physically cannot be returned from [`ffi!`] outside.
+/// `'g` is the lifetime of the ScopeGuard block of [`crate::ffi!`] in which it was created.
+/// Until it is `'static` — the value physically cannot be returned from [`crate::ffi!`] outside.
 pub struct AllocatedMemory<'g>
 {
   /// Raw address of the allocated memory block in the zygote heap.

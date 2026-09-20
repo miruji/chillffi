@@ -36,7 +36,7 @@ pub(crate) trait PrimitiveValue: Primitive
 
 // =================================================================================================
 
-/// Mirrors `arg::private`: hides [`Value`]/[`PrimitiveValue`] behind the
+/// Mirrors `arg::private`: hides `Value`/`PrimitiveValue` behind the
 /// already-public [`Arg`] wrapper, so the methods below never name a
 /// `pub(crate)` type in their own signature.
 pub mod private
@@ -71,9 +71,9 @@ pub mod private
 }
 
 /// Sealed marker trait for concrete types producible as an FFI call/read
-/// result. Only crate-internal [`PrimitiveValue`] implementors satisfy it —
+/// result. Only crate-internal `PrimitiveValue` implementors satisfy it —
 /// external crates cannot name `PrimitiveValue` to implement this either —
-/// which keeps [`Value`] and [`PrimitiveValue`] out of the public API while
+/// which keeps `Value` and `PrimitiveValue` out of the public API while
 /// still letting `T: FfiPrimitive` appear in `pub fn` signatures.
 pub trait FfiPrimitive: Primitive + private::Sealed + private::FromFfiValue {}
 impl<T: PrimitiveValue> FfiPrimitive for T {}

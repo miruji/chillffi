@@ -46,7 +46,7 @@ impl DynamicList
 
 impl From<Box<[Value]>> for DynamicList
 {
-  /// Converts a vector of [`Value`]s into a [`DynamicList`].
+  /// Converts a vector of `Value`s into a [`DynamicList`].
   fn from(values: Box<[Value]>) -> Self
   {
     Self { values }

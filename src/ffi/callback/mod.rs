@@ -36,9 +36,9 @@ pub mod __reexport
 /// Inside this crate it has exactly one instantiation that matters:
 /// `Callable<CallbackArgs, Value>` — the fully dynamic form the clone's
 /// dispatcher holds. Macro-generated code never implements it directly: the
-/// expansion runs in *foreign* crates where [`Value`] (`pub(crate)`) cannot
+/// expansion runs in *foreign* crates where `Value` (`pub(crate)`) cannot
 /// even be named; the bridge from the typed macro-generated entry point to
-/// this dynamic form is [`ErasedCallable`] + [`StateFnAdapter`].
+/// this dynamic form is [`ErasedCallable`] + `StateFnAdapter`.
 pub trait Callable<Args, Output>: Send
 {
   /// Executes the captured closure with the provided arguments.
@@ -47,7 +47,7 @@ pub trait Callable<Args, Output>: Send
 
 // =================================================================================================
 
-/// Decodes bytes produced by [`Sendable::encode`] into a callable object.
+/// Decodes bytes produced by `Sendable::encode` into a callable object.
 /// Called inside the zygote clone after receiving the bytes over IPC —
 /// requires no startup registration of any kind in that process.
 ///
@@ -77,7 +77,7 @@ pub fn decode(bytes: &[u8]) -> Result<ErasedCallable, CallError>
 
 // =================================================================================================
 
-/// Restricts the `$scope` position in [`callback!`] to genuine `Scope<'g>`
+/// Restricts the `$scope` position in [`crate::callback!`] to genuine `Scope<'g>`
 /// values, so passing anything else is a compile error.
 ///
 /// `macro_rules!` can't express `$scope: Scope<'g>` directly — `$scope:expr`
@@ -85,8 +85,8 @@ pub fn decode(bytes: &[u8]) -> Result<ErasedCallable, CallError>
 /// `$scope.callback(...)` method call would accept *any* type with a
 /// same-shaped method, checked only after expansion. Routing the call
 /// through this sealed trait instead makes the macro require the bound
-/// explicitly: [`IsScope`] can only be implemented inside this crate (via the
-/// private [`Sealed`] supertrait), and only `Scope<'g>` does — so anything
+/// explicitly: `IsScope` can only be implemented inside this crate (via the
+/// private `Sealed` supertrait), and only `Scope<'g>` does — so anything
 /// else fails to compile right here, not silently "worked" by accident.
 pub mod sealed
 {

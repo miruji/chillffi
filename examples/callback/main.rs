@@ -2,8 +2,7 @@
 mod platform;
 use crate::platform::LibcPath;
 // =================================================================================================
-use chillffi::callback;
-use chillffi::ffi;
+use chillffi::{callback, ffi};
 use chillffi::ffi::allocatedMemory::AllocatedMemory;
 use chillffi::ffi::types::primitive::Callback;
 use chillffi::ffi::types::primitive::Pointer;

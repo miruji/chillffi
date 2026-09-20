@@ -157,7 +157,7 @@ fn callById(
 
 // =================================================================================================
 
-/// Handle of a loaded library, bound to the [`Scope<'g>`] it was loaded through —
+/// Handle of a loaded library, bound to the `Scope<'g>` it was loaded through —
 /// same model as [`AllocatedMemory<'g>`](crate::ffi::allocatedMemory::AllocatedMemory).
 ///
 /// `Library<'g>` cannot outlive the scope that created it: there is no way to

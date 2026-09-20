@@ -4,7 +4,7 @@ use crate::ffi::callback::Envelope;
 use crate::ffi::callback::Type;
 // =================================================================================================
 
-/// A concrete closure produced by [`callback!`], still on the originating side.
+/// A concrete closure produced by [`crate::callback!`], still on the originating side.
 ///
 /// Holds a raw bit-copy of a native closure's captured environment (see
 /// [`Sendable::fromClosure`]) together with the metadata required to

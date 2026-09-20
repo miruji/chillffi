@@ -4,7 +4,7 @@ use std::ffi::CStr;
 use std::ffi::CString;
 // =================================================================================================
 
-/// Public wrapper over [`Value`] for signatures of public methods.
+/// Public wrapper over `Value` for signatures of public methods.
 #[derive(Debug, Clone)]
 pub struct Arg(pub(crate) Value);
 
@@ -34,7 +34,7 @@ impl<T: private::Sealed + private::IntoFfiValue> FfiArg for T {}
 
 impl From<Callback> for Arg
 {
-  /// Wraps the callback ID into [`Value::Function`].
+  /// Wraps the callback ID into `Value::Function`.
   fn from(callback: Callback) -> Self
   {
     Self(Value::Function(callback.0))
@@ -45,7 +45,7 @@ impl private::Sealed for Callback {}
 
 impl private::IntoFfiValue for Callback
 {
-  /// Converts the handle into [`Value::Function`].
+  /// Converts the handle into `Value::Function`.
   fn intoFfiValue(self) -> Arg
   {
     Arg(Value::Function(self.0))
