@@ -34,6 +34,10 @@ include = [
 
 documentation = "https://docs.rs/chillffi"
 [package.metadata.docs.rs]
+# libffi-sys cannot cross-compile its C code inside the docs.rs Linux
+# Docker image. Feature `check_only` makes libffi-sys skip building C
+# entirely (build.rs returns immediately) — enough for rustdoc.
+features = ["docsrs"]
 targets = [
   "x86_64-unknown-linux-gnu",
   "aarch64-unknown-linux-gnu",
@@ -121,6 +125,12 @@ ipc-channel = "0.23.0"
 # - named pipes on Windows.
 
 # ======================================================================================================================
+
+[features]
+# Enabled only on docs.rs. Propagates to libffi-sys so it skips compiling
+# the native libffi C sources (required because docs.rs cross-compiles
+# without the proper C toolchains).
+docsrs = ["libffi/check_only"]
 
 [lints.rust]
 non_snake_case = "allow"

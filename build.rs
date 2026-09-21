@@ -6,6 +6,14 @@ use std::process::{Command, ExitStatus};
 
 fn main() -> ()
 {
+  // Examples C sources are only needed for `cargo test` / `cargo run --example`.
+  // docs.rs sets DOCS_RS=1 and has no cross-compilers for non-host targets —
+  // skip the whole step there (and whenever OUT_DIR is enough for rustdoc).
+  if env::var_os("DOCS_RS").is_some()
+  {
+    return;
+  }
+
   // Compiles C sources within the examples directory.
   let examplesDir: &Path = Path::new("examples");
   if examplesDir.exists()
