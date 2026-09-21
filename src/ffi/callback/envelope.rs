@@ -17,6 +17,7 @@ pub struct Envelope
   pub siteTag: u64,
 
   /// Serialized state of the captured variables.
+  #[serde(with = "serde_bytes")]
   pub bytes: Vec<u8>
 }
 

@@ -75,6 +75,25 @@ cc = "1.2"
 
 # ======================================================================================================================
 
+[target.'cfg(unix)'.dev-dependencies]
+divan = "0.1.21"
+pyo3 = { version = "0.29.2", features = ["auto-initialize"] }
+# Это нужно для benches
+
+# ======================================================================================================================
+
+# cargo bench --bench speed
+
+[[bench]]
+name = "warm"
+harness = false
+
+[[bench]]
+name = "cold"
+harness = false
+
+# ======================================================================================================================
+
 [dependencies]
 bincode = { version = "2.0.1", features = ["serde"] }
 # Provides binary serialization format for serde, used for efficient encoding
@@ -97,6 +116,9 @@ libc = { version = "1.0.0-alpha.4" }
 
 serde = { version = "1.0.229", features = ["derive"] }
 # Serialization and deserialization of request and response structures.
+
+serde_bytes = "0.11"
+# todo desc
 
 ctor = "1.0.13"
 # Execution of functions at process startup for automatic initialization.

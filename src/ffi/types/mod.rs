@@ -58,12 +58,15 @@ pub(crate) enum Value
 
   /// In C code, one would expect `uint8_t *data`;
   /// But without `len` these bytes are useless and `size_t len` is necessary.
+  #[serde(with = "serde_bytes")]
   RawString(Vec<u8>),
 
   /// In C code, one would expect `const char *str`; `\0` terminated.
+  #[serde(with = "serde_bytes")]
   CString(Vec<u8>),
 
   /// In C code, one would expect `const char *str, size_t len`.
+  #[serde(with = "serde_bytes")]
   String(Vec<u8>),
 
   /// Represents a Rust closure passed to C as a function pointer.
