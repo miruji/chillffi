@@ -63,12 +63,20 @@ pub enum FFIRequest
   /// `readErrno`: when true, the clone reads `errno` immediately after the C call
   /// returns and reports it back via [`FFIResponse::Ok`]'s second field. Costs one
   /// extra read when set — calls that don't need it can leave it `false`.
+  ///
+  /// `fixedArgs`: variadic-call marker. `Some(n)` means a C-style varargs
+  /// function whose first `n` builder arguments (`.arg()` calls) are fixed
+  /// and everything after them is variadic (`...`) — the clone then prepares
+  /// the call interface with libffi's `ffi_prep_cif_var` instead of
+  /// `ffi_prep_cif`. `None` means a regular fixed-signature call. Always
+  /// `None` for [`FFIRequest::CallPointer`].
   Call {
     libraryPath: String,
     functionName: String,
     args: Vec<Value>,
     resultType: Type,
-    readErrno: bool
+    readErrno: bool,
+    fixedArgs: Option<usize>
   },
 
   /// Allocates a block of memory of the specified length in the zygote address space.

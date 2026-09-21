@@ -38,6 +38,7 @@ keeping your main Rust application running.
 | Signals                  | ✅ Working with signals and calling pointers (`callvPointer`, `callPointer`).                     |
 | Errno Policy             | ✅ Configuring errno reading at the call, scope, or global level.                                 |
 | String data types        | ✅ String (`""`), CString (`c""`), RawString (`b""`).                                             |
+| Variadic arguments       | ✅ Support for variable arguments in function calls.                                              |
 | Sandbox (FS protection)  | ⏳ [#45](https://github.com/rts-lang/chillffi/issues/45)                                          |
 | Libraries from bytes     | ⏳ [#42](https://github.com/rts-lang/chillffi/issues/42)                                          |
 

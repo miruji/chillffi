@@ -131,7 +131,8 @@ fn callById(
   functionName: &str,
   args: Vec<Value>,
   resultType: Type,
-  readErrno: bool
+  readErrno: bool,
+  fixedArgs: Option<usize>
 ) -> Result<Value, FFIError>
 {
   // Check whether the global zygote in ZygoteState has been initialized.
@@ -151,7 +152,8 @@ fn callById(
     functionName: functionName.to_string(),
     args,
     resultType,
-    readErrno
+    readErrno,
+    fixedArgs
   })
 }
 
@@ -268,12 +270,49 @@ impl<'a, 'g> CallBuilder<'a, 'g>
     self
   }
 
+  /// Switches the chain into variadic mode — the exact analogue of C's `...`:
+  /// every argument added *before* this call is a fixed argument, everything
+  /// added *after* is variadic. Returns a [`VariadicCallBuilder`], so the
+  /// fixed/variadic boundary is enforced by the type system: the compiler
+  /// rejects adding fixed arguments after the variadic part has begun, and
+  /// calling `.variadic()` twice on the same chain.
+  ///
+  /// The number of fixed arguments is frozen at this moment — it equals the
+  /// number of `.arg()` calls made so far. libffi's `ffi_prep_cif_var`
+  /// requires at least one fixed argument, so a chain that calls
+  /// `.variadic()` before any `.arg()` fails with
+  /// [`FFIError::BadArgument`] at `.result()`/`.void()` time.
+  ///
+  /// Note: C applies default argument promotions in the variadic part —
+  /// `f32` promotes to `double`, small integer types promote to `int`.
+  /// Pass already-promoted types for variadic arguments (`f64` for `%f`,
+  /// `i32` for `%d`, ...).
+  ///
+  /// # Example
+  /// ```ignore
+  /// // printf(const char *format, ...)
+  /// libc.call("printf")
+  ///   .arg(c"Hello %s %d\n") // fixed argument (format)
+  ///   .variadic()            // <- everything after this is variadic
+  ///   .arg(c"world")         // %s
+  ///   .arg::<i32>(42)        // %d
+  ///   .result::<i32>()?;
+  /// ```
+  #[inline]
+  pub const fn variadic(self) -> VariadicCallBuilder<'a, 'g>
+  {
+    // The current argument count IS the number of fixed arguments —
+    // this is exactly why variadic() consumes self: the boundary is frozen here.
+    let fixedArgsCount: usize = self.args.len();
+    VariadicCallBuilder { base: self, fixedArgsCount }
+  }
+
   /// Finalize: execute and return a typed result.
   #[inline]
   pub fn result<T: FfiPrimitive>(self) -> Result<T, FFIError>
   {
     let readErrno: bool = resolveReadErrno(self.readErrno);
-    self.lib.__call(&self.name, self.args, readErrno)
+    self.lib.__call(&self.name, self.args, readErrno, None)
   }
 
   /// Finalize: execute and discard the result (void / fire-and-forget).
@@ -281,7 +320,80 @@ impl<'a, 'g> CallBuilder<'a, 'g>
   pub fn void(self) -> Result<(), FFIError>
   {
     let readErrno: bool = resolveReadErrno(self.readErrno);
-    self.lib.__call::<()>(&self.name, self.args, readErrno).map(|_| ())
+    self.lib.__call::<()>(&self.name, self.args, readErrno, None).map(|_| ())
+  }
+}
+
+// =================================================================================================
+
+/// Builder for fluent FFI calls to C-style variadic functions (`...`).
+///
+/// Produced exclusively by [`CallBuilder::variadic`] — the moment the
+/// fixed/variadic boundary is crossed, the chain changes type, so the two
+/// argument kinds can never be mixed up: `VariadicCallBuilder` has no
+/// `.variadic()` of its own and its `.arg()` appends variadic arguments
+/// only. Finalize with `.result()` / `.void()` exactly like [`CallBuilder`].
+///
+/// Note: C applies default argument promotions in the variadic part —
+/// `f32` promotes to `double`, `i8`/`i16` promote to `int`. Pass
+/// already-promoted types (`f64`, `i32`, ...) for variadic arguments.
+#[doc(hidden)]
+pub struct VariadicCallBuilder<'a, 'g>
+{
+  /// The fixed-argument builder captured at `.variadic()` time.
+  base: CallBuilder<'a, 'g>,
+
+  /// Number of fixed arguments: the length of `base.args` at the moment
+  /// `.variadic()` was called. libffi's `ffi_prep_cif_var` takes
+  /// `nfixedargs` and `ntotalargs` separately, so this travels with the
+  /// request as `FFIRequest::Call`'s `fixedArgs`.
+  fixedArgsCount: usize
+}
+
+impl<'a, 'g> VariadicCallBuilder<'a, 'g>
+{
+  /// Append one variadic argument. Chainable.
+  #[inline]
+  pub fn arg<T: FfiArg>(mut self, arg: T) -> Self
+  {
+    self.base.args.push(arg.intoFfiValue().0);
+    self
+  }
+
+  /// Forces errno capture for this call specifically, regardless of the
+  /// scope's or global default. Read it back afterward via
+  /// [`Scope::lastErrno`](crate::ffi::scope::Scope::lastErrno).
+  #[inline]
+  pub const fn errno(mut self) -> Self
+  {
+    self.base.readErrno = Some(true);
+    self
+  }
+
+  /// Forces errno capture *off* for this call, overriding a scope/global
+  /// default that would otherwise have enabled it.
+  #[inline]
+  pub const fn noErrno(mut self) -> Self
+  {
+    self.base.readErrno = Some(false);
+    self
+  }
+
+  /// Finalize: execute the variadic call and return a typed result.
+  #[inline]
+  pub fn result<T: FfiPrimitive>(self) -> Result<T, FFIError>
+  {
+    let readErrno: bool = resolveReadErrno(self.base.readErrno);
+    self.base.lib.__call(&self.base.name, self.base.args, readErrno, Some(self.fixedArgsCount))
+  }
+
+  /// Finalize: execute the variadic call and discard the result (void).
+  #[inline]
+  pub fn void(self) -> Result<(), FFIError>
+  {
+    let readErrno: bool = resolveReadErrno(self.base.readErrno);
+    self.base.lib.__call::<()>(&self.base.name, self.base.args, readErrno, Some(self.fixedArgsCount))
+      .map(|_| ())
   }
 }
 
@@ -305,7 +417,8 @@ impl<'g> Library<'g>
     &self,
     functionName: &str,
     args: Vec<Value>,
-    readErrno: bool
+    readErrno: bool,
+    fixedArgs: Option<usize>
   ) -> Result<T, FFIError>
   {
     let raw: Value = callById(
@@ -313,7 +426,8 @@ impl<'g> Library<'g>
       &self.libraryPath,
       functionName, args,
       T::TypeTag,
-      readErrno
+      readErrno,
+      fixedArgs
     )?;
     T::fromFfiValue(Arg(raw))
   }
@@ -340,9 +454,10 @@ impl<'g> Library<'g>
 mod tests
 {
   use crate::ffi;
+  use crate::ffi::allocatedMemory::AllocatedMemory;
   use crate::ffi::library::getRegistry;
   use crate::ffi::scope::Scope;
-  use crate::platform::{platformExt, LibcPath, LibmPath, OpenSymbolName};
+  use crate::platform::{platformExt, LibcPath, LibmPath, OpenSymbolName, SprintfLibPath, SprintfSymbolName};
   // ===============================================================================================
 
   /// Checks that `.errno()` makes a failed call's errno observable via
@@ -501,6 +616,60 @@ mod tests
     }).expect("FFI call failed");
 
     assert_eq!(result, 5);
+  }
+
+  // ===============================================================================================
+
+  /// End-to-end variadic call: `sprintf(char *str, const char *format, ...)`
+  /// — two fixed arguments followed by variadic ones, with the formatted
+  /// string read back out of zygote memory.
+  #[test]
+  fn variadicSprintf() -> ()
+  {
+    let text: String = ffi!(|scope| {
+      let libc: Library = scope.load(SprintfLibPath)?;
+      let mem: AllocatedMemory = scope.alloc(64)?;
+
+      let written: i32 = libc.call(SprintfSymbolName)
+        .arg(mem.asPointer()) // char *str       — fixed 1
+        .arg(c"Hello %s %d!") // const char *fmt — fixed 2
+        .variadic()           // <- everything after this is variadic
+        .arg(c"world")        // %s
+        .arg::<i32>(42)       // %d
+        .result()?;
+
+      assert_eq!(written, 15, "sprintf should report 15 written chars");
+
+      // mem.read() returns the whole allocation (64 bytes), including
+      // uninitialized junk after the trailing NUL. Use sprintf's return
+      // value as the exact length of the formatted C string.
+      let bytes: Vec<u8> = mem.read()?;
+      let text: String = String::from_utf8(bytes[..written as usize].to_vec())
+        .expect("sprintf output must be valid UTF-8");
+
+      Ok(text)
+    }).expect("variadic sprintf failed");
+
+    assert_eq!(text, "Hello world 42!");
+  }
+
+  /// `.variadic()` before any fixed argument is rejected: libffi's
+  /// `ffi_prep_cif_var` requires at least one fixed argument
+  /// (`nfixedargs >= 1`).
+  #[test]
+  fn variadicWithoutFixedArgsFails() -> ()
+  {
+    use crate::ffi::errors::FFIError;
+
+    let err: FFIError = ffi!(|scope| {
+      let libc: Library = scope.load(SprintfLibPath)?;
+      libc.call(SprintfSymbolName)
+        .variadic() // no fixed arguments before this
+        .arg(c"hello")
+        .result::<i32>()
+    }).expect_err("a variadic call without fixed arguments should fail");
+
+    assert!(matches!(err, FFIError::BadArgument(_)), "unexpected error: {err:?}");
   }
 
   // ===============================================================================================

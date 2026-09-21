@@ -80,6 +80,12 @@ mod linux
 
   #[allow(dead_code)]
   pub const SignalNumber: i32 = 10; // SIGUSR1
+
+  // sprintf
+  #[allow(dead_code)]
+  pub const SprintfLibPath: &str = LibcPath;
+  #[allow(dead_code)]
+  pub const SprintfSymbolName: &str = "sprintf";
 }
 
 // =================================================================================================
@@ -129,6 +135,12 @@ mod macos
 
   #[allow(dead_code)]
   pub const SignalNumber: i32 = 10; // SIGUSR1
+
+  // sprintf
+  #[allow(dead_code)]
+  pub const SprintfLibPath: &str = LibcPath;
+  #[allow(dead_code)]
+  pub const SprintfSymbolName: &str = "sprintf";
 }
 
 // =================================================================================================
@@ -184,6 +196,12 @@ mod windows
   // No SIGUSR1 here; the UCRT accepts SIGTERM.
   #[allow(dead_code)]
   pub const SignalNumber: i32 = 15; // SIGTERM
+
+  // sprintf
+  #[allow(dead_code)]
+  pub const SprintfLibPath: &str = "ntdll.dll";
+  #[allow(dead_code)]
+  pub const SprintfSymbolName: &str = "sprintf";
 }
 
 // =================================================================================================

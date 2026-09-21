@@ -180,6 +180,33 @@ fn toCifTypes(value: &Value) -> Result<Vec<LibffiType>, FFIError>
   }
 }
 
+/// Expands the number of *builder* arguments (what `.arg()` appended) into
+/// the number of C ABI arguments that the first `nfixed` of them occupy on
+/// the CIF — `Value::String` alone occupies two (pointer + length), the
+/// rest occupy one each — and validates the variadic boundary on the way:
+/// at least one fixed argument (libffi's `ffi_prep_cif_var` requires
+/// `nfixedargs >= 1`) and no more fixed arguments than were actually passed.
+fn fixedCifArgsCount(args: &[Value], nfixed: usize) -> Result<usize, FFIError>
+{
+  if nfixed == 0 {
+    return Err(FFIError::BadArgument(
+      "variadic call: at least one fixed argument is required before the variadic part".to_string()
+    ));
+  }
+  if nfixed > args.len() {
+    return Err(FFIError::BadArgument(format!(
+      "variadic call: {} fixed arguments declared, but only {} arguments were passed",
+      nfixed, args.len()
+    )));
+  }
+
+  let mut count: usize = 0;
+  for arg in &args[..nfixed] {
+    count += toCifTypes(arg)?.len();
+  }
+  Ok(count)
+}
+
 impl From<&Type> for LibffiType
 {
   /// Specifies how many bytes `libffi` should read for the value.
@@ -653,8 +680,8 @@ pub fn executeFFI(
 {
   match request
   {
-    FFIRequest::Call { libraryPath, functionName, args, resultType, readErrno } =>
-      executeCall(libraryPath, functionName, args, resultType, cache, readErrno),
+    FFIRequest::Call { libraryPath, functionName, args, resultType, readErrno, fixedArgs } =>
+      executeCall(libraryPath, functionName, args, resultType, cache, readErrno, fixedArgs),
 
     FFIRequest::CallPointer { pointer, args, resultType, readErrno } =>
       executeCallPointer(pointer, args, resultType, readErrno),
@@ -792,7 +819,8 @@ fn executeCall(
   args: Vec<Value>,
   ffiResultType: Type,
   cache: &mut FxHashMap<String, Library>,
-  readErrno: bool
+  readErrno: bool,
+  fixedArgs: Option<usize>
 ) -> Result<Value, FFIError>
 {
   // Check arguments for the presence of Value::None before building C ABI types
@@ -832,7 +860,7 @@ fn executeCall(
         })?
     };
 
-  invokeAtPointer(functionPointer as usize, args, ffiResultType, readErrno)
+  invokeAtPointer(functionPointer as usize, args, ffiResultType, readErrno, fixedArgs)
 }
 
 /// Calls a raw function pointer directly — no `dlopen`/`dlsym`, the address
@@ -851,7 +879,7 @@ fn executeCallPointer(
     return Err(FFIError::BadArgument("null function pointer".to_string()));
   }
 
-  invokeAtPointer(pointer, args, ffiResultType, readErrno)
+  invokeAtPointer(pointer, args, ffiResultType, readErrno, None)
 }
 
 /// Shared by `executeCall` (address resolved via `dlsym`) and
@@ -861,7 +889,8 @@ fn invokeAtPointer(
   pointer: usize,
   args: Vec<Value>,
   ffiResultType: Type,
-  readErrno: bool
+  readErrno: bool,
+  fixedArgs: Option<usize>
 ) -> Result<Value, FFIError>
 {
   // Check arguments for the presence of Value::None before building C ABI types
@@ -880,7 +909,25 @@ fn invokeAtPointer(
 
   let returnType: LibffiType = LibffiType::from(&ffiResultType);
 
-  let cif: Cif = Cif::new(argsTypes, returnType);
+  // Regular call: ffi_prep_cif. Variadic call: ffi_prep_cif_var — the same
+  // interface, additionally told how many of the leading C arguments are
+  // the fixed ones, so libffi can set up the va_arg machinery for the rest.
+  //
+  // Note: libffi-rs signature is try_new_variadic(args, fixed_args, result)
+  // (args iterator first, then fixed count).
+  let cif: Cif = match fixedArgs
+  {
+    Some(nfixed) =>
+    {
+      // `nfixed` counts builder arguments (what `.arg()` appended), while
+      // the CIF counts C ABI arguments — a Value::String alone occupies two
+      // of them (pointer + length) — so expand the first nfixed values.
+      let nfixedCif: usize = fixedCifArgsCount(&args, nfixed)?;
+      Cif::try_new_variadic(argsTypes, nfixedCif, returnType)
+        .map_err(|e| FFIError::Other(format!("ffi_prep_cif_var failed: {e:?}")))?
+    }
+    None => Cif::new(argsTypes, returnType)
+  };
 
   // Prepare storage for the values that the arguments will reference
   let mut storage: Vec<Box<dyn Any>> = Vec::with_capacity(args.len());
