@@ -98,6 +98,9 @@ libc = { version = "1.0.0-alpha.4" }
 serde = { version = "1.0.229", features = ["derive"] }
 # Serialization and deserialization of request and response structures.
 
+serde_bytes = "0.11.19"
+# todo desc
+
 ctor = "1.0.13"
 # Execution of functions at process startup for automatic initialization.
 

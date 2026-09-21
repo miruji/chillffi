@@ -104,6 +104,7 @@ pub enum FFIRequest
   /// Parent sends a serialized closure; the clone deserializes and stores it.
   RegisterCallback {
     id: u64,
+    #[serde(with = "serde_bytes")]
     bytes: Vec<u8>,
     argTypes: Vec<Type>,
     returnType: Type
