@@ -199,9 +199,9 @@ originally taken from the **RTS** language itself. Therefore, **chillffi** inher
 For a more accurate understanding, you should familiarize yourself with the text of the license.
 
 But if very simply, for those who just work and want to use it:
-- Personal/non-commercial use → free
-- Commercial use without modifications → free
-- Commercial use with modifications → requires the author's permission or opening the changes
+- Personal/non-commercial use ➞ free
+- Commercial use without modifications ➞ free
+- Commercial use with modifications ➞ requires the author's permission or opening the changes
 
 Keep this in mind for your projects.
 
