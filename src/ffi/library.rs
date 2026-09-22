@@ -556,7 +556,50 @@ mod tests
   }
 
   // ===============================================================================================
+  
+  /// Checks that `.errno()` captures the OS error via `Scope::lastOsError()`.
+  #[cfg(windows)]
+  #[test]
+  fn osErrorCapturedWhenRequested() -> ()
+  {
+    const ErrorAccessDenied: u32 = 5;
 
+    let osError: Option<u32> = ffi!(|scope| {
+      scope.addSearchPath("examples/errno");
+      let lib: Library = scope.load(platformExt!("liberrno"))?;
+      let result: i32 =
+        lib.call("failWithOsError")
+          .arg::<u32>(ErrorAccessDenied)
+          .errno()
+          .result()?;
+      assert_eq!(result, -1);
+      Ok(Scope::lastOsError())
+    }).expect("osError capture test failed");
+
+    assert_eq!(osError, Some(ErrorAccessDenied));
+  }
+
+  /// Checks that without `.errno()`, `Scope::lastOsError()` stays `None`.
+  #[cfg(windows)]
+  #[test]
+  fn osErrorNoneWhenNotRequested() -> ()
+  {
+    let osError: Option<u32> = ffi!(|scope| {
+      scope.addSearchPath("examples/errno");
+      let lib: Library = scope.load(platformExt!("liberrno"))?;
+      let result: i32 =
+        lib.call("failWithOsError")
+          .arg::<u32>(5)
+          .result()?; // no .errno()
+      assert_eq!(result, -1);
+      Ok(Scope::lastOsError())
+    }).expect("osError-off test failed");
+
+    assert_eq!(osError, None);
+  }
+
+  // ===============================================================================================
+  
   /// Checks that library is removed from registry when explicitly dropped.
   #[test]
   fn libraryDrop() -> ()

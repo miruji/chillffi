@@ -8,17 +8,24 @@ use chillffi::ffi::scope::Scope;
 // =================================================================================================
 
 /// Errno capture: per-call, per-scope, and global. Priority: call > scope > global.
+///
+/// On Windows there is a second error channel — `GetLastError()` — captured
+/// under the **same** `.errno()` / `setReadErrno` flag as CRT errno. Read it
+/// with [`Scope::lastOsError`]. There is no separate builder method: one flag
+/// controls both channels. On Unix `lastOsError()` is always `None`.
 fn main() -> ()
 {
-  testCallErrno();
-  testScopeErrno();
-  testGlobalErrno();
+  callErrno();
+  scopeErrno();
+  globalErrno();
+  #[cfg(windows)]
+  callOsError();
 }
 
 // =================================================================================================
 
-/// `.errno()` on a single call.
-fn testCallErrno() -> ()
+/// `.errno()` on a single call → CRT errno via [`Scope::lastErrno`].
+fn callErrno() -> ()
 {
   let errno: Option<i32> = ffi!(|scope| {
     scope.addSearchPath("examples/errno");
@@ -39,7 +46,7 @@ fn testCallErrno() -> ()
 }
 
 /// `setReadErrno(true)` on the scope — every call in the block captures errno.
-fn testScopeErrno() -> ()
+fn scopeErrno() -> ()
 {
   let errno: Option<i32> = ffi!(|scope| {
     scope.addSearchPath("examples/errno");
@@ -60,7 +67,7 @@ fn testScopeErrno() -> ()
 }
 
 /// Global `setGlobalReadErrno(true)`.
-fn testGlobalErrno() -> ()
+fn globalErrno() -> ()
 {
   setGlobalReadErrno(true);
 
@@ -79,6 +86,34 @@ fn testGlobalErrno() -> ()
 
   assert_eq!(errno, Some(9));
   println!("ok: global-level errno");
+}
+
+// =================================================================================================
+
+/// Windows: same `.errno()` also captures `GetLastError` → [`Scope::lastOsError`].
+///
+/// No extra builder method — the `readErrno` flag covers both channels.
+#[cfg(windows)]
+fn callOsError() -> ()
+{
+  const ErrorAccessDenied: u32 = 5; // ERROR_ACCESS_DENIED
+
+  let osError: Option<u32> = ffi!(|scope| {
+    scope.addSearchPath("examples/errno");
+    let liberrno: Library = scope.load(platformExt!("liberrno"))?;
+
+    let result: i32 =
+      liberrno.call("failWithOsError")
+        .arg::<u32>(ErrorAccessDenied)
+        .errno()
+        .result()?;
+
+    assert_eq!(result, -1);
+    Ok(Scope::lastOsError())
+  }).expect("call-level osError failed");
+
+  assert_eq!(osError, Some(ErrorAccessDenied));
+  println!("ok: call-level lastOsError (GetLastError) = {osError:?}");
 }
 
 // =================================================================================================
