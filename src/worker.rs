@@ -6,7 +6,7 @@ use crate::zygote::FFIRequest;
 use fxhash::FxHashMap;
 use libffi::middle::Closure;
 use libffi::middle::Type as LibffiType;
-use libffi::middle::{Arg, Cif, CodePtr};
+use libffi::middle::{Arg, Cif, CodePtr, Ret};
 use libloading::Library;
 use parking_lot::lock_api::MutexGuard;
 use parking_lot::{Mutex, RawMutex};
@@ -167,18 +167,102 @@ fn toCifTypes(value: &Value) -> Result<Vec<LibffiType>, FFIError>
     Value::RawString(_) | Value::CString(_) => Ok(vec![LibffiType::pointer()]),
     Value::String(_) => Ok(vec![LibffiType::pointer(), LibffiType::usize()]),
     Value::Function(_) => Ok(vec![LibffiType::pointer()]),
-    Value::Struct(_) =>
-      // todo:
-      //  Passing a struct BY VALUE as a call argument is a distinct feature from
-      //  readDynamicStruct/writeDynamicStruct (which work through a pointer) —
-      //  technically reachable via Arg::new(bytes)/Type::structure(...), just not
-      //  implemented yet. Write it into memory and pass Value::Pointer instead.
-      Err(FFIError::Other(
-        "Value::Struct by value as a call argument is not implemented — writeDynamicStruct + Pointer instead".to_string()
-      )),
+    Value::Struct(fields) => {
+      let fieldTypes: Vec<LibffiType> = fields
+        .iter()
+        .map(valueToLibffiType)
+        .collect::<Result<Vec<_>, _>>()?;
+      Ok(vec![LibffiType::structure(fieldTypes)])
+    }
     Value::None => Err(FFIError::BadArgument("Cannot pass Value::None as argument".to_string()))
   }
 }
+
+// =================================================================================================
+
+/// Derives a `LibffiType` from a runtime [`Value`].
+///
+/// Used when building CIF argument types for by-value structs whose shape
+/// is carried by the `Value` itself (each field knows its concrete variant).
+/// Nested `Value::Struct` fields are turned into nested `structure(...)` types
+/// recursively. `Value::String` is rejected — it expands to two CIF arguments
+/// and cannot appear as a single struct field.
+fn valueToLibffiType(value: &Value) -> Result<LibffiType, FFIError>
+{
+  match value
+  {
+    Value::U8(_) => Ok(LibffiType::u8()),
+    Value::U16(_) => Ok(LibffiType::u16()),
+    Value::U32(_) => Ok(LibffiType::u32()),
+    Value::U64(_) => Ok(LibffiType::u64()),
+    Value::Usize(_) => Ok(LibffiType::usize()),
+    Value::I8(_) => Ok(LibffiType::i8()),
+    Value::I16(_) => Ok(LibffiType::i16()),
+    Value::I32(_) => Ok(LibffiType::i32()),
+    Value::I64(_) => Ok(LibffiType::i64()),
+    Value::Isize(_) => Ok(LibffiType::isize()),
+    Value::F32(_) => Ok(LibffiType::f32()),
+    Value::F64(_) => Ok(LibffiType::f64()),
+    Value::Bool(_) => Ok(LibffiType::u8()),
+    Value::Pointer(_) | Value::RawString(_) | Value::CString(_) | Value::Function(_) =>
+      Ok(LibffiType::pointer()),
+    Value::String(_) =>
+      Err(FFIError::BadArgument(
+        "Value::String cannot be a field of a by-value struct".to_string()
+      )),
+    Value::Struct(fields) => {
+      let nested: Vec<LibffiType> = fields
+        .iter()
+        .map(valueToLibffiType)
+        .collect::<Result<Vec<_>, _>>()?;
+      Ok(LibffiType::structure(nested))
+    }
+    Value::None =>
+      Err(FFIError::BadArgument("Cannot derive type from Value::None".to_string()))
+  }
+}
+
+/// Derives a [`Type`] schema from a runtime [`Value`].
+///
+/// Needed by `writeStructAt` / `structLayout` when serializing a by-value
+/// struct argument into a contiguous buffer: the layout engine takes a
+/// `&[Type]`, not a `&[Value]`. Nested structs are mapped recursively.
+fn valueToType(value: &Value) -> Result<Type, FFIError>
+{
+  match value
+  {
+    Value::U8(_) => Ok(Type::U8),
+    Value::U16(_) => Ok(Type::U16),
+    Value::U32(_) => Ok(Type::U32),
+    Value::U64(_) => Ok(Type::U64),
+    Value::Usize(_) => Ok(Type::Usize),
+    Value::I8(_) => Ok(Type::I8),
+    Value::I16(_) => Ok(Type::I16),
+    Value::I32(_) => Ok(Type::I32),
+    Value::I64(_) => Ok(Type::I64),
+    Value::Isize(_) => Ok(Type::Isize),
+    Value::F32(_) => Ok(Type::F32),
+    Value::F64(_) => Ok(Type::F64),
+    Value::Bool(_) => Ok(Type::Bool),
+    Value::Pointer(_) | Value::RawString(_) | Value::CString(_) | Value::Function(_) =>
+      Ok(Type::Pointer),
+    Value::String(_) =>
+      Err(FFIError::BadArgument(
+        "Value::String cannot be a field of a by-value struct".to_string()
+      )),
+    Value::Struct(fields) => {
+      let nested: Vec<Type> = fields
+        .iter()
+        .map(valueToType)
+        .collect::<Result<Vec<_>, _>>()?;
+      Ok(Type::Struct(nested.into_boxed_slice()))
+    }
+    Value::None =>
+      Err(FFIError::BadArgument("Cannot derive type from Value::None".to_string()))
+  }
+}
+
+// =================================================================================================
 
 /// Expands the number of *builder* arguments (what `.arg()` appended) into
 /// the number of C ABI arguments that the first `nfixed` of them occupy on
@@ -301,9 +385,16 @@ fn prepareFFIArgs<'a>(
         };
         storage.push(Box::new(codePointer));
       }
-      Value::Struct(_) => return Err(FFIError::Other(
-        "Value::Struct by value as a call argument is not implemented — writeDynamicStruct + Pointer instead".to_string()
-      )),
+      Value::Struct(values) => {
+        let fields: Vec<Type> = values
+          .iter()
+          .map(valueToType)
+          .collect::<Result<Vec<_>, _>>()?;
+        let size: usize = structLayout(&fields)?.1;
+        let mut buf: Vec<u8> = vec![0u8; size];
+        writeStructAt(buf.as_mut_ptr() as usize, &fields, values)?;
+        storage.push(Box::new(buf));
+      }
       Value::None => return Err(FFIError::BadArgument("Cannot pass Value::None".to_string()))
     }
   }
@@ -315,80 +406,78 @@ fn prepareFFIArgs<'a>(
     match arg
     {
       Value::U8(_) => {
-        let val: &u8 = downcastRef(&storage[i])?;
-        argsFfi.push(Arg::new(val));
+        let value: &u8 = downcastRef(&storage[i])?;
+        argsFfi.push(Arg::new(value));
       }
       Value::U16(_) => {
-        let val: &u16 = downcastRef(&storage[i])?;
-        argsFfi.push(Arg::new(val));
+        let value: &u16 = downcastRef(&storage[i])?;
+        argsFfi.push(Arg::new(value));
       }
       Value::U32(_) => {
-        let val: &u32 =downcastRef(&storage[i])?;
-        argsFfi.push(Arg::new(val));
+        let value: &u32 =downcastRef(&storage[i])?;
+        argsFfi.push(Arg::new(value));
       }
       Value::U64(_) => {
-        let val: &u64 = downcastRef(&storage[i])?;
-        argsFfi.push(Arg::new(val));
+        let value: &u64 = downcastRef(&storage[i])?;
+        argsFfi.push(Arg::new(value));
       }
       Value::Usize(_) => {
-        let val: &usize = downcastRef(&storage[i])?;
-        argsFfi.push(Arg::new(val));
+        let value: &usize = downcastRef(&storage[i])?;
+        argsFfi.push(Arg::new(value));
       }
       Value::I8(_) => {
-        let val: &i8 = downcastRef(&storage[i])?;
-        argsFfi.push(Arg::new(val));
+        let value: &i8 = downcastRef(&storage[i])?;
+        argsFfi.push(Arg::new(value));
       }
       Value::I16(_) => {
-        let val: &i16 = downcastRef(&storage[i])?;
-        argsFfi.push(Arg::new(val));
+        let value: &i16 = downcastRef(&storage[i])?;
+        argsFfi.push(Arg::new(value));
       }
       Value::I32(_) => {
-        let val: &i32 = downcastRef(&storage[i])?;
-        argsFfi.push(Arg::new(val));
+        let value: &i32 = downcastRef(&storage[i])?;
+        argsFfi.push(Arg::new(value));
       }
       Value::I64(_) => {
-        let val: &i64 = downcastRef(&storage[i])?;
-        argsFfi.push(Arg::new(val));
+        let value: &i64 = downcastRef(&storage[i])?;
+        argsFfi.push(Arg::new(value));
       }
       Value::Isize(_) => {
-        let val: &isize = downcastRef(&storage[i])?;
-        argsFfi.push(Arg::new(val));
+        let value: &isize = downcastRef(&storage[i])?;
+        argsFfi.push(Arg::new(value));
       }
       Value::F32(_) => {
-        let val: &f32 = downcastRef(&storage[i])?;
-        argsFfi.push(Arg::new(val));
+        let value: &f32 = downcastRef(&storage[i])?;
+        argsFfi.push(Arg::new(value));
       }
       Value::F64(_) => {
-        let val: &f64 = downcastRef(&storage[i])?;
-        argsFfi.push(Arg::new(val));
+        let value: &f64 = downcastRef(&storage[i])?;
+        argsFfi.push(Arg::new(value));
       }
       Value::Bool(_) => {
-        let val: &u8 = downcastRef(&storage[i])?;
-        argsFfi.push(Arg::new(val));
+        let value: &u8 = downcastRef(&storage[i])?;
+        argsFfi.push(Arg::new(value));
       }
       Value::Pointer(_) => {
-        let ptr: &*mut c_void = storage[i].downcast_ref().unwrap();
-        argsFfi.push(Arg::new(ptr));
+        let pointer: &*mut c_void = storage[i].downcast_ref().unwrap();
+        argsFfi.push(Arg::new(pointer));
       }
       Value::RawString(_) | Value::CString(_) => {
-        let (_, ptr): &(Vec<u8>, *mut c_void) = downcastRef(&storage[i])?;
-        argsFfi.push(Arg::new(ptr));
+        let (_, pointer): &(Vec<u8>, *mut c_void) = downcastRef(&storage[i])?;
+        argsFfi.push(Arg::new(pointer));
       }
       Value::String(_) => {
-        let (_, ptr, len): &(Vec<u8>, *mut c_void, usize) = downcastRef(&storage[i])?;
-        argsFfi.push(Arg::new(ptr));
-        argsFfi.push(Arg::new(len));
+        let (_, pointer, length): &(Vec<u8>, *mut c_void, usize) = downcastRef(&storage[i])?;
+        argsFfi.push(Arg::new(pointer));
+        argsFfi.push(Arg::new(length));
       }
       Value::Function { .. } => {
-        let ptr: &*mut c_void = downcastRef(&storage[i])?;
-        argsFfi.push(Arg::new(ptr));
+        let pointer: &*mut c_void = downcastRef(&storage[i])?;
+        argsFfi.push(Arg::new(pointer));
       }
-      Value::Struct(_) =>
-      // todo:
-      //  Unreachable in practice: the first pass above already returns Err
-      //  on Value::Struct before this loop is ever entered. Kept only for
-      //  match exhaustiveness now that Value::Struct exists.
-        unreachable!("Value::Struct rejected in prepareFFIArgs' first pass"),
+      Value::Struct(_) => {
+        let buffer: &Vec<u8> = downcastRef(&storage[i])?;
+        argsFfi.push(Arg::new(buffer.as_slice()));
+      }
       Value::None => return Err(FFIError::BadArgument("Cannot pass Value::None".to_string()))
     }
   }
@@ -421,71 +510,70 @@ fn invokeFFI(
       Value::None
     }
     Type::U8 => {
-      let val: u8 = unsafe{ cif.call::<u8>(codePointer, argsFfi) };
-      Value::U8(val)
+      let value: u8 = unsafe{ cif.call::<u8>(codePointer, argsFfi) };
+      Value::U8(value)
     }
     Type::U16 => {
-      let val: u16 = unsafe{ cif.call::<u16>(codePointer, argsFfi) };
-      Value::U16(val)
+      let value: u16 = unsafe{ cif.call::<u16>(codePointer, argsFfi) };
+      Value::U16(value)
     }
     Type::U32 => {
-      let val: u32 = unsafe{ cif.call::<u32>(codePointer, argsFfi) };
-      Value::U32(val)
+      let value: u32 = unsafe{ cif.call::<u32>(codePointer, argsFfi) };
+      Value::U32(value)
     }
     Type::U64 => {
-      let val: u64 = unsafe{ cif.call::<u64>(codePointer, argsFfi) };
-      Value::U64(val)
+      let value: u64 = unsafe{ cif.call::<u64>(codePointer, argsFfi) };
+      Value::U64(value)
     }
     Type::Usize => {
-      let val: usize = unsafe{ cif.call::<usize>(codePointer, argsFfi) };
-      Value::Usize(val)
+      let value: usize = unsafe{ cif.call::<usize>(codePointer, argsFfi) };
+      Value::Usize(value)
     }
     Type::I8 => {
-      let val: i8 = unsafe{ cif.call::<i8>(codePointer, argsFfi) };
-      Value::I8(val)
+      let value: i8 = unsafe{ cif.call::<i8>(codePointer, argsFfi) };
+      Value::I8(value)
     }
     Type::I16 => {
-      let val: i16 = unsafe{ cif.call::<i16>(codePointer, argsFfi) };
-      Value::I16(val)
+      let value: i16 = unsafe{ cif.call::<i16>(codePointer, argsFfi) };
+      Value::I16(value)
     }
     Type::I32 => {
-      let val: i32 = unsafe{ cif.call::<i32>(codePointer, argsFfi) };
-      Value::I32(val)
+      let value: i32 = unsafe{ cif.call::<i32>(codePointer, argsFfi) };
+      Value::I32(value)
     }
     Type::I64 => {
-      let val: i64 = unsafe{ cif.call::<i64>(codePointer, argsFfi) };
-      Value::I64(val)
+      let value: i64 = unsafe{ cif.call::<i64>(codePointer, argsFfi) };
+      Value::I64(value)
     }
     Type::Isize => {
-      let val: isize = unsafe{ cif.call::<isize>(codePointer, argsFfi) };
-      Value::Isize(val)
+      let value: isize = unsafe{ cif.call::<isize>(codePointer, argsFfi) };
+      Value::Isize(value)
     }
     Type::F32 => {
-      let val: f32 = unsafe{ cif.call::<f32>(codePointer, argsFfi) };
-      Value::F32(val)
+      let value: f32 = unsafe{ cif.call::<f32>(codePointer, argsFfi) };
+      Value::F32(value)
     }
     Type::F64 => {
-      let val: f64 = unsafe{ cif.call::<f64>(codePointer, argsFfi) };
-      Value::F64(val)
+      let value: f64 = unsafe{ cif.call::<f64>(codePointer, argsFfi) };
+      Value::F64(value)
     }
     Type::Bool => {
-      let val: u8 = unsafe{ cif.call::<u8>(codePointer, argsFfi) };
-      Value::Bool(val != 0)
+      let value: u8 = unsafe{ cif.call::<u8>(codePointer, argsFfi) };
+      Value::Bool(value != 0)
     }
     Type::Pointer => {
-      let ptr: *mut c_void = unsafe{ cif.call::<*mut c_void>(codePointer, argsFfi) };
-      Value::Pointer(ptr as usize)
+      let pointer: *mut c_void = unsafe{ cif.call::<*mut c_void>(codePointer, argsFfi) };
+      Value::Pointer(pointer as usize)
     }
-    Type::Struct(_) =>
-      // todo:
-      //  `cif.call::<T>()` needs T: Sized known at compile time — impossible for
-      //  a struct shaped by a runtime Vec<Type>. The real fix is `Ret::new` over
-      //  a `Vec<u8>` buffer via `cif.call_return_into` (libffi-rs's `Ret`/`Arg`
-      //  both accept `?Sized`, so this doesn't need the low-level `ffi_cif`
-      //  dance) — a distinct feature from readDynamicStruct, not implemented yet.
-      return Err(FFIError::Other(
-        "returning a struct by value is not implemented — call with an out-param pointer and readDynamicStruct instead".to_string()
-      ))
+    Type::Struct(fields) => {
+      let size: usize = structLayout(fields)?.1;
+      let mut buffer: Vec<u8> = vec![0u8; size];
+      unsafe{
+        let ret: Ret = Ret::new(buffer.as_mut_slice());
+        cif.call_return_into(codePointer, argsFfi, ret);
+      }
+      readStructAt(buffer.as_ptr() as usize, fields)?
+    }
   };
 
   // Immediately after cif.call() (see the doc comment above), before
@@ -666,6 +754,9 @@ fn writeRet(ret: &mut c_void, value: Value, t: &Type)
     (Type::F64, Value::F64(v)) => unsafe{ *(ret as *mut c_void as *mut f64) = v }
     (Type::Bool, Value::Bool(v)) => unsafe{ *(ret as *mut c_void as *mut u8) = if v { 1 } else { 0 } }
     (Type::Pointer, Value::Pointer(v)) => unsafe{ *(ret as *mut c_void as *mut usize) = v }
+    (Type::Struct(fields), Value::Struct(values)) => {
+      let _ = writeStructAt(ret as *mut c_void as usize, fields, &values);
+    }
     _ => {}
   }
 }

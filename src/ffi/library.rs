@@ -2,7 +2,7 @@ use crate::__ffiInternal::ClonedZygote;
 use crate::errnoPolicy::globalReadErrno;
 use crate::ffi::errors::FFIError;
 use crate::ffi::scope::currentScopeReadErrno;
-use crate::ffi::types::primitive::{Arg, FfiArg, FfiPrimitive};
+use crate::ffi::types::primitive::{Arg, FfiArg, FfiPrimitive, StructValue};
 use crate::ffi::types::Type;
 use crate::ffi::types::Value;
 use crate::zygote::ZygoteState;
@@ -315,6 +315,35 @@ impl<'a, 'g> CallBuilder<'a, 'g>
     self.lib.__call(&self.name, self.args, readErrno, None)
   }
 
+  /// Finalize: execute and return a struct by value with the given field layout.
+  ///
+  /// The shape is a runtime `&[Type]` list — the same one used by
+  /// [`Scope::readDynamicStruct`](crate::ffi::scope::Scope::readDynamicStruct).
+  /// Required because the return buffer is untyped until `readStructAt`
+  /// decodes it; unlike `.arg(StructValue)`, the result side cannot infer
+  /// field types from values that do not exist yet.
+  #[inline]
+  pub fn resultStruct(self, fields: &[Type]) -> Result<StructValue, FFIError>
+  {
+    let readErrno: bool = resolveReadErrno(self.readErrno);
+    let resultType: Type = Type::structure(fields.iter().cloned());
+    let raw: Value = callById(
+      self.lib.id(),
+      self.lib.path(),
+      &self.name,
+      self.args,
+      resultType,
+      readErrno,
+      None
+    )?;
+    match raw {
+      Value::Struct(values) => Ok(StructValue::fromValues(values)),
+      other => Err(FFIError::Other(format!(
+        "expected struct return, got {:?}", other
+      )))
+    }
+  }
+
   /// Finalize: execute and discard the result (void / fire-and-forget).
   #[inline]
   pub fn void(self) -> Result<(), FFIError>
@@ -385,6 +414,32 @@ impl<'a, 'g> VariadicCallBuilder<'a, 'g>
   {
     let readErrno: bool = resolveReadErrno(self.base.readErrno);
     self.base.lib.__call(&self.base.name, self.base.args, readErrno, Some(self.fixedArgsCount))
+  }
+
+  /// Finalize: execute the variadic call and return a struct by value.
+  ///
+  /// Same contract as [`CallBuilder::resultStruct`] — the field layout must
+  /// be supplied explicitly so the return buffer can be decoded.
+  #[inline]
+  pub fn resultStruct(self, fields: &[Type]) -> Result<StructValue, FFIError>
+  {
+    let readErrno: bool = resolveReadErrno(self.base.readErrno);
+    let resultType: Type = Type::structure(fields.iter().cloned());
+    let raw: Value = callById(
+      self.base.lib.id(),
+      self.base.lib.path(),
+      &self.base.name,
+      self.base.args,
+      resultType,
+      readErrno,
+      Some(self.fixedArgsCount)
+    )?;
+    match raw {
+      Value::Struct(values) => Ok(StructValue::fromValues(values)),
+      other => Err(FFIError::Other(format!(
+        "expected struct return, got {:?}", other
+      )))
+    }
   }
 
   /// Finalize: execute the variadic call and discard the result (void).

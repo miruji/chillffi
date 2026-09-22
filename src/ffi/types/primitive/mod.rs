@@ -5,7 +5,7 @@ mod pointer;
 pub use pointer::Pointer;
 // =================================================================================================
 mod dynamicList;
-pub use dynamicList::DynamicList;
+pub use dynamicList::{DynamicList, StructValue};
 // =================================================================================================
 pub mod arg;
 pub use arg::Arg;

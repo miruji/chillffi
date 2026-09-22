@@ -1,4 +1,4 @@
-use crate::ffi::types::primitive::{Callback, Pointer};
+use crate::ffi::types::primitive::{Callback, Pointer, StructValue};
 use crate::ffi::types::Value;
 use std::ffi::CStr;
 use std::ffi::CString;
@@ -105,5 +105,25 @@ implSealedArg!(CString);
 implSealedArg!(&CStr);
 implSealedArg!(Vec<u8>);
 implSealedArg!(&[u8]);
+
+// =================================================================================================
+
+impl private::Sealed for StructValue {}
+
+impl private::IntoFfiValue for StructValue
+{
+  fn intoFfiValue(self) -> Arg
+  {
+    Arg(Value::Struct(self.values))
+  }
+}
+
+impl From<StructValue> for Arg
+{
+  fn from(s: StructValue) -> Self
+  {
+    Self(Value::Struct(s.values))
+  }
+}
 
 // =================================================================================================

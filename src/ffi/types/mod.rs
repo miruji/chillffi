@@ -123,3 +123,15 @@ pub enum Type
 }
 
 // =================================================================================================
+
+impl Type
+{
+  /// Builds a `Type::Struct` from a slice of field types.
+  #[inline]
+  pub fn structure(fields: impl IntoIterator<Item = Self>) -> Self
+  {
+    Self::Struct(fields.into_iter().collect::<Vec<_>>().into_boxed_slice())
+  }
+}
+
+// =================================================================================================

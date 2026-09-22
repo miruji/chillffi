@@ -16,31 +16,31 @@ keeping your main Rust application running.
 
 ## ✨ Features
 
-| Feature                  | Status                                                                                           |
-|--------------------------|--------------------------------------------------------------------------------------------------|
-| Crash isolation          | ✅ A separate process for FFI that does not break your Runtime.                                   |
-| Native FFI execution     | ✅ Not a VM, not large in size, and does not require large dependencies.                          |
-| Startup speed            | ✅ The Zygote model does not retain garbage and uses a fast `fork` for each FFI.                  |
-| IPC                      | ✅ `ipc-channel` provides serialization and is implemented for different platforms.               |
-| Multithreading and async | ✅ Does not break with multithreading and async                                                   |
-| Scope                    | ✅ Scope for FFI execution areas (`ffi!`); so that they are short and do not escape.              |
-| Retained Scope           | ✅ Temporary retention of the FFI scope for dynamic systems.                                      |
-| Dynamic loading          | ✅ `libffi` is simple, stable, cross-platform, and small in size.                                 |
-| Path resolver            | ✅ Global, scope-level, and direct path resolver for libraries.                                   |
-| Static FFI               | ✅ Through Rust code.                                                                             |
-| Dynamic FFI              | ✅ On-the-fly function calls without the need to compile static C bindings.                       |
-| Static structures        | ✅ `repr` structures.                                                                             |
-| Dynamic structures       | ✅ Reading and writing structures with arbitrary layouts.                                         |
-| Pointer-based structures | ✅ Support for passing structures through pointers.                                               |
-| By-value structures      | ⏳ Support for passing structures by value. [#46](https://github.com/rts-lang/chillffi/issues/46) |
-| Allocation handling      | ✅ Allocation of a memory region for FFI.                                                         |
-| Callbacks                | ✅ Passing closures as C functions (`callback!`).                                                 |
-| Signals                  | ✅ Working with signals and calling pointers (`callvPointer`, `callPointer`).                     |
-| Errno Policy             | ✅ Configuring errno reading at the call, scope, or global level.                                 |
-| String data types        | ✅ String (`""`), CString (`c""`), RawString (`b""`).                                             |
-| Variadic arguments       | ✅ Support for variable arguments in function calls.                                              |
-| Sandbox (FS protection)  | ⏳ [#45](https://github.com/rts-lang/chillffi/issues/45)                                          |
-| Libraries from bytes     | ⏳ [#42](https://github.com/rts-lang/chillffi/issues/42)                                          |
+| Feature                  | Status                                                                              |
+|--------------------------|-------------------------------------------------------------------------------------|
+| Crash isolation          | ✅ A separate process for FFI that does not break your Runtime.                      |
+| Native FFI execution     | ✅ Not a VM, not large in size, and does not require large dependencies.             |
+| Startup speed            | ✅ The Zygote model does not retain garbage and uses a fast `fork` for each FFI.     |
+| IPC                      | ✅ `ipc-channel` provides serialization and is implemented for different platforms.  |
+| Multithreading and async | ✅ Does not break with multithreading and async                                      |
+| Scope                    | ✅ Scope for FFI execution areas (`ffi!`); so that they are short and do not escape. |
+| Retained Scope           | ✅ Temporary retention of the FFI scope for dynamic systems.                         |
+| Dynamic loading          | ✅ `libffi` is simple, stable, cross-platform, and small in size.                    |
+| Path resolver            | ✅ Global, scope-level, and direct path resolver for libraries.                      |
+| Static FFI               | ✅ Through Rust code.                                                                |
+| Dynamic FFI              | ✅ On-the-fly function calls without the need to compile static C bindings.          |
+| Static structures        | ✅ `repr` structures.                                                                |
+| Dynamic structures       | ✅ Reading and writing structures with arbitrary layouts.                            |
+| Pointer-based structures | ✅ Support for passing structures through pointers.                                  |
+| By-value structures      | ✅ Support for passing structures by value.                                          |
+| Allocation handling      | ✅ Allocation of a memory region for FFI.                                            |
+| Callbacks                | ✅ Passing closures as C functions (`callback!`).                                    |
+| Signals                  | ✅ Working with signals and calling pointers (`callvPointer`, `callPointer`).        |
+| Errno Policy             | ✅ Configuring errno reading at the call, scope, or global level.                    |
+| String data types        | ✅ String (`""`), CString (`c""`), RawString (`b""`).                                |
+| Variadic arguments       | ✅ Support for variable arguments in function calls.                                 |
+| Sandbox (FS protection)  | ⏳ [#45](https://github.com/rts-lang/chillffi/issues/45)                             |
+| Libraries from bytes     | ⏳ [#42](https://github.com/rts-lang/chillffi/issues/42)                             |
 
 ---
 

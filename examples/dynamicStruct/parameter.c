@@ -1,9 +1,9 @@
 #include <stdlib.h>
 
 #ifdef _WIN32
-  #define CHILLFFI_EXPORT __declspec(dllexport)
+  #define ChillffiExport __declspec(dllexport)
 #else
-  #define CHILLFFI_EXPORT
+  #define ChillffiExport
 #endif
 
 // A C function that takes a
@@ -16,7 +16,7 @@ struct Data {
 
 static int lastSum = 0;
 
-CHILLFFI_EXPORT void process(struct Data *data) {
+ChillffiExport void process(struct Data *data) {
   int sum = 0;
   for (int i = 0; i < data->size; i++) {
     sum += data->values[i];
@@ -24,6 +24,6 @@ CHILLFFI_EXPORT void process(struct Data *data) {
   lastSum = sum;
 }
 
-CHILLFFI_EXPORT int getSum(void) {
+ChillffiExport int getSum(void) {
   return lastSum;
 }
