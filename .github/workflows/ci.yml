@@ -53,6 +53,12 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
       
+      #
+      - name: Docs
+        run: cargo doc --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+      
       # Build and compatibility check.
       - name: Run tests
         run: cargo test
