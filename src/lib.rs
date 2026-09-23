@@ -180,6 +180,7 @@ mod platform;
 pub mod ffi;
 pub mod pathResolver;
 pub mod errnoPolicy;
+pub mod tracePolicy;
 
 // =================================================================================================
 

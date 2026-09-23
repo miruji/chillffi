@@ -37,6 +37,7 @@ keeping your main Rust application running.
 | Callbacks                | ✅ Passing closures as C functions (`callback!`).                                    |
 | Signals                  | ✅ Working with signals and calling pointers (`callvPointer`, `callPointer`).        |
 | Errno Policy             | ✅ Configuring errno reading at the call, scope, or global level.                    |
+| Trace (debug logging)    | ✅ `ChillffiTrace=1` env var + `.trace()`/`Scope::setTrace`/`setGlobalTrace`.        |
 | String data types        | ✅ String (`""`), CString (`c""`), RawString (`b""`).                                |
 | Variadic arguments       | ✅ Support for variable arguments in function calls.                                 |
 | Sandbox (FS protection)  | ⏳ [#45](https://github.com/rts-lang/chillffi/issues/45)                             |
@@ -166,6 +167,61 @@ This is also different from the WASM approach - because we preserve a true nativ
 2. When work with FFI is required - a copy is created from the zygote.
 3. Data and descriptors are transferred through a secure socket channel in memory.
 4. In case of errors, the supervisor intercepts the worker crash and returns the error to Rust, keeping your application stable.
+
+## 🔍 Trace (debug logging)
+
+Every FFI call happens in a separate forked process, so a crash or hang in the
+C side normally surfaces as just `FFIError::ZygoteCommunicationFailed("…")` —
+a single opaque line. Trace turns that into a step-by-step log of what was
+sent, what the forked clone did with it, and what came back.
+
+### Four priority layers (most specific wins)
+
+1. **per-call** — `.trace()` / `.noTrace()` on the call builder
+   ```rust,ignore
+   libm.call("sqrt").arg::<f64>(16.0).trace().result()
+   ```
+2. **scope** — `Scope::setTrace(bool)` inside `ffi!{ ... }`
+   ```rust,ignore
+   ffi!(|scope| {
+     scope.setTrace(true);
+     // every call in this block is traced
+   })
+   ```
+3. **global (programmatic)** — `chillffi::tracePolicy::setGlobalTrace(bool)`
+4. **env var** — `ChillffiTrace=1` (master switch: forces trace on both
+   Runtime and clone sides for every request, including non-Call ones;
+   clones inherit it from `fork` / `spawn`)
+
+### Runtime side vs clone side
+
+- **Runtime side** (your main process) logs the request it's about to send
+  and the response it gets back — governed by all four layers above.
+- **Clone side** (the forked worker) logs what it received and what it
+  produced when either:
+  - `ChillffiTrace=1` is set in the environment (covers every request), or
+  - the request itself carries `trace: true` (set by `.trace()` /
+    `Scope::setTrace` / `setGlobalTrace` via `resolveTrace`).
+
+So `.trace()` on a single call is the surgical way to drill into one
+specific request on both sides; `ChillffiTrace=1 cargo run --example trace`
+is the fastest way to see every request without touching the call sites.
+
+### Example output
+
+A crash scenario (`examples/isolation`) with trace on:
+```
+[chillffi] send Call { libraryPath: "libcrash.so", functionName: "triggerSegfault", … }
+[chillffi:clone] recv Call { libraryPath: "libcrash.so", functionName: "triggerSegfault", … }
+[chillffi] recv err (clone unreachable): ZygoteCommunicationFailed("Ipc Disconnected.")
+```
+
+The `[chillffi:clone] recv` line is the last thing the clone printed before
+dying — it pinpoints exactly which request triggered the crash. Without
+trace, only the `recv err` line would appear, with no context about what
+the clone was doing.
+
+Run `cargo run --example trace` to see all four layers in action.
 
 > [!IMPORTANT]
 >

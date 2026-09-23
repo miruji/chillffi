@@ -7,6 +7,7 @@ use crate::ffi::types::primitive::DynamicList;
 use crate::ffi::types::primitive::{Arg, FfiArg, FfiPrimitive};
 use crate::ffi::types::{Type, Value};
 use crate::pathResolver::{resolveGlobal, PathResolver};
+use crate::tracePolicy::globalTrace;
 use crate::zygote::{ClonedZygote, FFIRequest, ZygoteGuard};
 use std::cell::RefCell;
 use std::cell::UnsafeCell;
@@ -22,7 +23,11 @@ struct HeavyStack
   pathResolver: Option<PathResolver>,
   /// Scope-level override for errno capture — see [`Scope::setReadErrno`].
   /// `None` means "no scope override, fall through to the global default".
-  readErrno: Option<bool>
+  readErrno: Option<bool>,
+  /// Scope-level override for trace output — see [`Scope::setTrace`].
+  /// `None` means "no scope override, fall through to the global default
+  /// / `ChillffiTrace`". Same most-specific-wins order as `readErrno`.
+  trace: Option<bool>
 }
 
 // =================================================================================================
@@ -73,6 +78,18 @@ pub(super) fn currentScopeReadErrno() -> Option<bool>
   })
 }
 
+/// Reads the innermost active scope's trace override, if any was set via
+/// [`Scope::setTrace`] — same shape and same safety reasoning as
+/// [`currentScopeReadErrno`], just for the trace flag instead of errno.
+pub(super) fn currentScopeTrace() -> Option<bool>
+{
+  ScopeStack.with(|stack| {
+    let guardPtr: *const ScopeGuard = *stack.borrow().last()?;
+    let slot: &Option<HeavyStack> = unsafe{ &*(*guardPtr).inner.get() };
+    slot.as_ref()?.trace
+  })
+}
+
 // =================================================================================================
 
 /// A handle to the ScopeGuard of the current [`crate::ffi!`]-block — borrows it for 'g.
@@ -103,7 +120,7 @@ impl<'g> Scope<'g>
   pub fn addSearchPath(&self, path: impl Into<PathBuf>) -> ()
   {
     let slot: &mut Option<HeavyStack> = unsafe{ &mut *self.guard.inner.get() };
-    slot.get_or_insert_with(|| HeavyStack{ pathResolver: None, readErrno: None })
+    slot.get_or_insert_with(|| HeavyStack{ pathResolver: None, readErrno: None, trace: None })
       .pathResolver.get_or_insert_with(PathResolver::default)
       .addPath(path);
   }
@@ -118,8 +135,24 @@ impl<'g> Scope<'g>
   pub fn setReadErrno(&self, enabled: bool) -> ()
   {
     let slot: &mut Option<HeavyStack> = unsafe{ &mut *self.guard.inner.get() };
-    slot.get_or_insert_with(|| HeavyStack{ pathResolver: None, readErrno: None })
+    slot.get_or_insert_with(|| HeavyStack{ pathResolver: None, readErrno: None, trace: None })
       .readErrno = Some(enabled);
+  }
+
+  /// Overrides trace output for every call made through this scope. A
+  /// per-call override (`.trace()`/`.noTrace()` on
+  /// [`CallBuilder`](crate::ffi::library::CallBuilder)) still takes priority
+  /// over this; this in turn takes priority over the global default set via
+  /// [`crate::tracePolicy::setGlobalTrace`] / `ChillffiTrace`.
+  ///
+  /// Affects both the Runtime side (logs the request / response) and the
+  /// clone side (the `trace` flag rides on the request so the forked worker
+  /// logs its own work too).
+  pub fn setTrace(&self, enabled: bool) -> ()
+  {
+    let slot: &mut Option<HeavyStack> = unsafe{ &mut *self.guard.inner.get() };
+    slot.get_or_insert_with(|| HeavyStack{ pathResolver: None, readErrno: None, trace: None })
+      .trace = Some(enabled);
   }
 
   // ===============================================================================================
@@ -154,7 +187,8 @@ impl<'g> Scope<'g>
     if stack.is_none() {
       *stack = Some(HeavyStack{
         pathResolver: None,
-        readErrno: None
+        readErrno: None,
+        trace: None
       });
     }
 
@@ -183,7 +217,8 @@ impl<'g> Scope<'g>
     if stack.is_none() {
       *stack = Some(HeavyStack{
         pathResolver: None,
-        readErrno: None
+        readErrno: None,
+        trace: None
       });
     }
 
@@ -211,7 +246,8 @@ impl<'g> Scope<'g>
     if stack.is_none() {
       *stack = Some(HeavyStack{
         pathResolver: None,
-        readErrno: None
+        readErrno: None,
+        trace: None
       });
     }
 
@@ -303,7 +339,7 @@ impl<'g> Scope<'g>
     args: Vec<Arg>
   ) -> Result<T, FFIError>
   {
-    self.callPointerImpl(pointer, args, None)
+    self.callPointerImpl(pointer, args, None, None)
   }
 
   /// Fire-and-forget variant of `callPointer` — mirrors
@@ -328,28 +364,49 @@ impl<'g> Scope<'g>
     args: Vec<Arg>
   ) -> Result<T, FFIError>
   {
-    self.callPointerImpl(pointer, args, Some(true))
+    // errno=true, trace inherits scope / global / `ChillffiTrace`.
+    self.callPointerImpl(pointer, args, Some(true), None)
   }
 
-  /// Shared implementation: resolves the effective `readErrno` flag (explicit
-  /// override, else scope, else global — same order as `CallBuilder::result`)
-  /// and sends the request.
+  /// Same as `callPointer`, but forces trace output for this specific call —
+  /// mirrors [`CallBuilder::trace`](crate::ffi::library::CallBuilder::trace).
+  /// There's no builder to chain `.trace()` onto, since `callPointer` skips
+  /// `CallBuilder` entirely; this method is the equivalent escape hatch.
+  #[inline]
+  pub fn callPointerTrace<T: FfiPrimitive>(
+    &self,
+    pointer: impl Into<usize>,
+    args: Vec<Arg>
+  ) -> Result<T, FFIError>
+  {
+    // trace=true, errno inherits scope / global.
+    self.callPointerImpl(pointer, args, None, Some(true))
+  }
+
+  /// Shared implementation: resolves the effective `readErrno` and `trace`
+  /// flags (explicit override, else scope, else global — same order as
+  /// `CallBuilder::result`) and sends the request.
   fn callPointerImpl<T: FfiPrimitive>(
     &self,
     pointer: impl Into<usize>,
     args: Vec<Arg>,
-    readErrno: Option<bool>
+    readErrno: Option<bool>,
+    trace: Option<bool>
   ) -> Result<T, FFIError>
   {
     let readErrno: bool = readErrno.unwrap_or_else(
       || currentScopeReadErrno().unwrap_or_else(globalReadErrno)
+    );
+    let trace: bool = trace.unwrap_or_else(
+      || currentScopeTrace().unwrap_or_else(globalTrace)
     );
     let args: Vec<Value> = args.into_iter().map(|a: Arg| a.0).collect();
     let raw: Value = sendRawRequest(FFIRequest::CallPointer {
       pointer: pointer.into(),
       args,
       resultType: T::TypeTag,
-      readErrno
+      readErrno,
+      trace
     })?;
     T::fromFfiValue(Arg(raw))
   }
@@ -823,6 +880,35 @@ mod tests
     }).expect("callPointer roundtrip failed");
 
     assert_eq!(secondRead, 22);
+  }
+
+  /// `callPointerTrace` — `callPointer`'s trace-only variant. Same setup as
+  /// [`callPointerAndCallvPointerRoundtrip`]: get a `void (*)(int)` from
+  /// `signal()`, then call it with trace on. The trace flag must not alter
+  /// the result; it just adds log output.
+  #[test]
+  fn callPointerTraceDoesNotBreakResult() -> ()
+  {
+    let written: i32 = ffi!(|scope| {
+      let libc: Library = scope.load(LibcPath)?;
+      let mem: AllocatedMemory = scope.alloc(4)?;
+      let addr: usize = mem.address();
+
+      let handler: Callback = callback!(scope, |signum: i32| -> () {
+        unsafe{ *(addr as *mut i32) = signum; }
+      });
+
+      libc.call("signal").arg::<i32>(SignalNumber).arg(handler).void()?;
+      let old: Pointer = libc.call("signal").arg::<i32>(SignalNumber).arg(Pointer(0)).result()?;
+
+      // callPointerTrace: same address, trace forced on. The handler still
+      // runs and writes the signum — trace must not break that.
+      let _: () = scope.callPointerTrace(old, vec![Arg::from(33i32)])?;
+      let written: i32 = i32::from_ne_bytes(mem.read()?.try_into().unwrap());
+      Ok(written)
+    }).expect("callPointerTrace roundtrip failed");
+
+    assert_eq!(written, 33);
   }
 
   // ===============================================================================================

@@ -2,9 +2,12 @@ use crate::__ffiInternal::ClonedZygote;
 use crate::errnoPolicy::globalReadErrno;
 use crate::ffi::errors::FFIError;
 use crate::ffi::scope::currentScopeReadErrno;
+use crate::ffi::scope::currentScopeTrace;
 use crate::ffi::types::primitive::{Arg, FfiArg, FfiPrimitive, StructValue};
 use crate::ffi::types::Type;
 use crate::ffi::types::Value;
+use crate::tracePolicy::envTrace;
+use crate::tracePolicy::globalTrace;
 use crate::zygote::ZygoteState;
 use crate::zygote::{FFIRequest, FFIResponse, ZygoteStack};
 use fxhash::FxHashMap;
@@ -94,6 +97,24 @@ pub(super) fn resolveReadErrno(perCall: Option<bool>) -> bool
       .unwrap_or_else(globalReadErrno))
 }
 
+/// Resolves the effective trace flag for a call — same most-specific-wins
+/// order as [`resolveReadErrno`]:
+/// 1. per-call override — `.trace()` / `.noTrace()` on the call builder
+/// 2. scope-level override — [`Scope::setTrace`](crate::ffi::scope::Scope::setTrace)
+/// 3. global default — [`crate::tracePolicy::setGlobalTrace`] / `ChillffiTrace`
+///
+/// The resolved value controls both the Runtime-side trace (this process logs
+/// the request it's about to send and the response it gets back) and the
+/// `trace` field placed into [`FFIRequest::Call`] / [`FFIRequest::CallPointer`]
+/// so the clone side logs its own work on the same call.
+#[inline]
+pub(super) fn resolveTrace(perCall: Option<bool>) -> bool
+{
+  perCall
+    .unwrap_or_else(|| currentScopeTrace()
+      .unwrap_or_else(globalTrace))
+}
+
 // =================================================================================================
 
 /// Sends a raw FFI request to the active zygote clone in the current thread's stack.
@@ -106,9 +127,28 @@ pub(super) fn sendRawRequest(request: FFIRequest) -> Result<Value, FFIError>
     return Err(FFIError::ZygoteNotInitialized);
   }
 
-  // Retrieve the most recently pushed active zygote 
+  // Runtime-side trace: the request is about to be sent. The flag was
+  // already resolved by the caller (`callById` / `Scope::callPointerImpl`)
+  // and baked into `Call`/`CallPointer`'s `trace` field — for non-Call
+  // variants the global default decides via `resolveTrace(None)`.
+  //
+  // `envTrace()` is checked first and OR-ed in: `ChillffiTrace=1` is the
+  // "debug everything" master switch — when set, the Runtime side logs
+  // every request regardless of `.noTrace()` overrides. Same shape as the
+  // clone side's `cloneEnvTrace() || requestTraceFlag` check, so the two
+  // sides stay symmetric.
+  let traceOn: bool = envTrace()
+    || match &request {
+      FFIRequest::Call { trace, .. } | FFIRequest::CallPointer { trace, .. } => *trace,
+      _ => resolveTrace(None)
+    };
+  if traceOn {
+    eprintln!("[chillffi] send {:?}", request);
+  }
+
+  // Retrieve the most recently pushed active zygote
   // from the thread-local stack to execute the raw FFI request.
-  ZygoteStack.with(|stack| {
+  let responseResult: Result<FFIResponse, FFIError> = ZygoteStack.with(|stack| {
     let mut mutStack: RefMut<Vec<ClonedZygote>> = stack.borrow_mut();
     let zygote: &mut ClonedZygote = mutStack.last_mut().ok_or(FFIError::NoActiveZygoteScope)?;
 
@@ -116,15 +156,45 @@ pub(super) fn sendRawRequest(request: FFIRequest) -> Result<Value, FFIError>
       Ok(FFIResponse::Ok(val, errno, osError)) => {
         LastErrno.set(errno);
         LastOsError.set(osError);
-        Ok(val)
+        Ok(FFIResponse::Ok(val, errno, osError))
       }
       Ok(FFIResponse::Err(err)) => Err(err),
       Err(err) => Err(FFIError::ZygoteCommunicationFailed(err))
     }
+  });
+
+  // Runtime-side trace: pair with the `send` log above. Logging the
+  // response (Ok value / Err variant) — or the IPC-level communication
+  // failure if the clone died before replying — closes the loop on what
+  // the parent process observed for this request.
+  if traceOn {
+    match &responseResult {
+      Ok(FFIResponse::Ok(val, errno, osError)) =>
+        eprintln!("[chillffi] recv ok  {:?} errno={:?} osError={:?}", val, errno, osError),
+      Ok(FFIResponse::Err(err)) =>
+        eprintln!("[chillffi] recv err {:?}", err),
+      Err(commErr) =>
+        eprintln!("[chillffi] recv err (clone unreachable): {}", commErr)
+    }
+  }
+
+  responseResult.map(|r| match r {
+    FFIResponse::Ok(val, _, _) => val,
+    // The Err arm already turned into `Err(commErr)` or `Err(err)` above;
+    // pulling it out of the response here can't fail.
+    FFIResponse::Err(_) => unreachable!("FFIResponse::Err handled above")
   })
 }
 
 /// Performs an FFI function call by the identifier of the registered library.
+//
+// `clippy::too_many_arguments`: 8 args is one over the default limit, but
+// each is genuinely needed — `libraryId` + `libraryPath` together resolve
+// the lib, `functionName`/`args`/`resultType` describe the call, and
+// `readErrno` / `trace` / `fixedArgs` are three orthogonal flags that all
+// ride on the same `FFIRequest::Call`. Splitting them into a struct just
+// to satisfy the lint would hide what's actually being sent.
+#[allow(clippy::too_many_arguments)]
 fn callById(
   libraryId: usize,
   libraryPath: &str,
@@ -132,6 +202,7 @@ fn callById(
   args: Vec<Value>,
   resultType: Type,
   readErrno: bool,
+  trace: bool,
   fixedArgs: Option<usize>
 ) -> Result<Value, FFIError>
 {
@@ -153,6 +224,7 @@ fn callById(
     args,
     resultType,
     readErrno,
+    trace,
     fixedArgs
   })
 }
@@ -227,7 +299,14 @@ pub struct CallBuilder<'a, 'g>
 
   /// Per-call override of errno capture. `None` falls through to the
   /// enclosing scope's setting, then the global default — see [`resolveReadErrno`].
-  readErrno: Option<bool>
+  readErrno: Option<bool>,
+
+  /// Per-call override of trace output. `None` falls through to the
+  /// enclosing scope's setting, then the global default / `ChillffiTrace` —
+  /// see [`resolveTrace`]. When `Some(true)`, this single call gets a
+  /// full send/recv log on the Runtime side *and* the clone side (the
+  /// `trace` flag rides on the request).
+  trace: Option<bool>
 }
 
 impl<'a, 'g> CallBuilder<'a, 'g>
@@ -239,7 +318,8 @@ impl<'a, 'g> CallBuilder<'a, 'g>
       lib,
       name: name.to_string(),
       args: Vec::new(),
-      readErrno: None
+      readErrno: None,
+      trace: None
     }
   }
 
@@ -267,6 +347,26 @@ impl<'a, 'g> CallBuilder<'a, 'g>
   pub const fn noErrno(mut self) -> Self
   {
     self.readErrno = Some(false);
+    self
+  }
+
+  /// Forces trace output for this call specifically, regardless of the
+  /// scope's or global default / `ChillffiTrace`. Logs the request and
+  /// response on the Runtime side *and* the clone side (the `trace` flag
+  /// rides on the request so the forked worker logs its own work too).
+  #[inline]
+  pub const fn trace(mut self) -> Self
+  {
+    self.trace = Some(true);
+    self
+  }
+
+  /// Forces trace output *off* for this call, overriding a scope/global
+  /// default (or `ChillffiTrace=1`) that would otherwise have enabled it.
+  #[inline]
+  pub const fn noTrace(mut self) -> Self
+  {
+    self.trace = Some(false);
     self
   }
 
@@ -312,7 +412,8 @@ impl<'a, 'g> CallBuilder<'a, 'g>
   pub fn result<T: FfiPrimitive>(self) -> Result<T, FFIError>
   {
     let readErrno: bool = resolveReadErrno(self.readErrno);
-    self.lib.__call(&self.name, self.args, readErrno, None)
+    let trace: bool = resolveTrace(self.trace);
+    self.lib.__call(&self.name, self.args, readErrno, trace, None)
   }
 
   /// Finalize: execute and return a struct by value with the given field layout.
@@ -326,6 +427,7 @@ impl<'a, 'g> CallBuilder<'a, 'g>
   pub fn resultStruct(self, fields: &[Type]) -> Result<StructValue, FFIError>
   {
     let readErrno: bool = resolveReadErrno(self.readErrno);
+    let trace: bool = resolveTrace(self.trace);
     let resultType: Type = Type::structure(fields.iter().cloned());
     let raw: Value = callById(
       self.lib.id(),
@@ -334,6 +436,7 @@ impl<'a, 'g> CallBuilder<'a, 'g>
       self.args,
       resultType,
       readErrno,
+      trace,
       None
     )?;
     match raw {
@@ -349,7 +452,8 @@ impl<'a, 'g> CallBuilder<'a, 'g>
   pub fn void(self) -> Result<(), FFIError>
   {
     let readErrno: bool = resolveReadErrno(self.readErrno);
-    self.lib.__call::<()>(&self.name, self.args, readErrno, None).map(|_| ())
+    let trace: bool = resolveTrace(self.trace);
+    self.lib.__call::<()>(&self.name, self.args, readErrno, trace, None).map(|_| ())
   }
 }
 
@@ -408,12 +512,31 @@ impl<'a, 'g> VariadicCallBuilder<'a, 'g>
     self
   }
 
+  /// Forces trace output for this call specifically — see
+  /// [`CallBuilder::trace`](crate::ffi::library::CallBuilder::trace).
+  #[inline]
+  pub const fn trace(mut self) -> Self
+  {
+    self.base.trace = Some(true);
+    self
+  }
+
+  /// Forces trace output *off* for this call — see
+  /// [`CallBuilder::noTrace`](crate::ffi::library::CallBuilder::noTrace).
+  #[inline]
+  pub const fn noTrace(mut self) -> Self
+  {
+    self.base.trace = Some(false);
+    self
+  }
+
   /// Finalize: execute the variadic call and return a typed result.
   #[inline]
   pub fn result<T: FfiPrimitive>(self) -> Result<T, FFIError>
   {
     let readErrno: bool = resolveReadErrno(self.base.readErrno);
-    self.base.lib.__call(&self.base.name, self.base.args, readErrno, Some(self.fixedArgsCount))
+    let trace: bool = resolveTrace(self.base.trace);
+    self.base.lib.__call(&self.base.name, self.base.args, readErrno, trace, Some(self.fixedArgsCount))
   }
 
   /// Finalize: execute the variadic call and return a struct by value.
@@ -424,6 +547,7 @@ impl<'a, 'g> VariadicCallBuilder<'a, 'g>
   pub fn resultStruct(self, fields: &[Type]) -> Result<StructValue, FFIError>
   {
     let readErrno: bool = resolveReadErrno(self.base.readErrno);
+    let trace: bool = resolveTrace(self.base.trace);
     let resultType: Type = Type::structure(fields.iter().cloned());
     let raw: Value = callById(
       self.base.lib.id(),
@@ -432,6 +556,7 @@ impl<'a, 'g> VariadicCallBuilder<'a, 'g>
       self.base.args,
       resultType,
       readErrno,
+      trace,
       Some(self.fixedArgsCount)
     )?;
     match raw {
@@ -447,7 +572,8 @@ impl<'a, 'g> VariadicCallBuilder<'a, 'g>
   pub fn void(self) -> Result<(), FFIError>
   {
     let readErrno: bool = resolveReadErrno(self.base.readErrno);
-    self.base.lib.__call::<()>(&self.base.name, self.base.args, readErrno, Some(self.fixedArgsCount))
+    let trace: bool = resolveTrace(self.base.trace);
+    self.base.lib.__call::<()>(&self.base.name, self.base.args, readErrno, trace, Some(self.fixedArgsCount))
       .map(|_| ())
   }
 }
@@ -473,6 +599,7 @@ impl<'g> Library<'g>
     functionName: &str,
     args: Vec<Value>,
     readErrno: bool,
+    trace: bool,
     fixedArgs: Option<usize>
   ) -> Result<T, FFIError>
   {
@@ -482,6 +609,7 @@ impl<'g> Library<'g>
       functionName, args,
       T::TypeTag,
       readErrno,
+      trace,
       fixedArgs
     )?;
     T::fromFfiValue(Arg(raw))
@@ -596,6 +724,83 @@ mod tests
     }).expect("osError-off test failed");
 
     assert_eq!(osError, None);
+  }
+
+  // ===============================================================================================
+  //  Trace
+  // ===============================================================================================
+
+  /// Trace is a side-effect-only addition — turning it on must not change
+  /// the call's observable result. `sqrt(16.0)` with `.trace()` returns 4.0
+  /// exactly as it would without it.
+  #[test]
+  fn traceCallDoesNotBreakResult() -> ()
+  {
+    let result: f64 = ffi!(|scope| {
+      let libm: Library = scope.load(LibmPath)?;
+      libm.call("sqrt").arg::<f64>(16.0).trace().result()
+    }).expect("traced sqrt failed");
+
+    assert!((result - 4.0).abs() < f64::EPSILON, "trace must not alter the call result");
+  }
+
+  /// `.noTrace()` overrides `Scope::setTrace(true)` — per-call override wins
+  /// over scope default, same priority rule as `.noErrno()` / `setReadErrno`.
+  /// Result is unchanged either way; this test pins the priority rule.
+  #[test]
+  fn noTraceOverridesScopeTrace() -> ()
+  {
+    let result: f64 = ffi!(|scope| {
+      scope.setTrace(true);
+      let libm: Library = scope.load(LibmPath)?;
+      libm.call("sqrt").arg::<f64>(25.0).noTrace().result()
+    }).expect("noTrace+scope-trace call failed");
+
+    assert!((result - 5.0).abs() < f64::EPSILON, "result must be unchanged by trace state");
+  }
+
+  /// `Scope::setTrace(true)` traces every call in the block — same
+  /// side-effect-only contract: result is unchanged by trace state.
+  #[test]
+  fn scopeTraceDoesNotBreakResult() -> ()
+  {
+    let result: f64 = ffi!(|scope| {
+      scope.setTrace(true);
+      let libm: Library = scope.load(LibmPath)?;
+      libm.call("sqrt").arg::<f64>(36.0).result()
+    }).expect("scope-trace sqrt failed");
+
+    assert!((result - 6.0).abs() < f64::EPSILON);
+  }
+
+  /// Variadic call path: `.trace()` on a `VariadicCallBuilder` chain. Same
+  /// guarantee — the call still produces the right value with trace on.
+  /// Uses `sprintf` because it exercises both the variadic ABI and a pointer
+  /// out-param, exactly the kind of call where trace is most useful.
+  #[test]
+  fn variadicTraceDoesNotBreakResult() -> ()
+  {
+    use crate::ffi::allocatedMemory::AllocatedMemory;
+
+    let text: String = ffi!(|scope| {
+      let libc: Library = scope.load(SprintfLibPath)?;
+      let mem: AllocatedMemory = scope.alloc(64)?;
+
+      let written: i32 = libc.call(SprintfSymbolName)
+        .arg(mem.asPointer())
+        .arg(c"%d-trace")
+        .variadic()
+        .arg::<i32>(7)
+        .trace()
+        .result()?;
+
+      let bytes: Vec<u8> = mem.read()?;
+      let text: String = String::from_utf8(bytes[..written as usize].to_vec())
+        .expect("sprintf output must be valid UTF-8");
+      Ok(text)
+    }).expect("variadic+trace sprintf failed");
+
+    assert_eq!(text, "7-trace", "trace must not alter the variadic call result");
   }
 
   // ===============================================================================================

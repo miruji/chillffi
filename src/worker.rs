@@ -2,6 +2,7 @@ use crate::ffi::callback::decode;
 use crate::ffi::callback::ErasedCallable;
 use crate::ffi::errors::FFIError;
 use crate::ffi::types::{Type, Value};
+use crate::tracePolicy::envTrace;
 use crate::zygote::FFIRequest;
 use fxhash::FxHashMap;
 use libffi::middle::Closure;
@@ -14,7 +15,59 @@ use std::any::Any;
 use std::cell::Cell;
 use std::ffi::c_void;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use crate::platform::low;
+// =================================================================================================
+
+/// Process-wide cache of the `ChillffiTrace` env var on the clone side.
+///
+/// Seeded once from the environment (which the clone inherited via `fork` on
+/// Unix / `spawn` on Windows) — never re-reads. So `setGlobalTrace(true)` in
+/// the parent *after* forking a clone does not retroactively turn this on for
+/// that clone; the env var is the only channel that reaches the clone side
+/// without an explicit per-call opt-in. Per-call `.trace()` overrides ride on
+/// the request's `trace` field instead — see [`requestTraceFlag`].
+static EnvTrace: AtomicBool = AtomicBool::new(false);
+static EnvSeeded: AtomicBool = AtomicBool::new(false);
+
+/// Reads the cached `ChillffiTrace` env var value on the clone side.
+///
+/// First call seeds it from the environment — concurrent callers may race
+/// the seed step, which is fine because the env read is side-effect-free and
+/// they all compute the same bool.
+#[inline]
+fn cloneEnvTrace() -> bool
+{
+  if !EnvSeeded.swap(true, Ordering::AcqRel) {
+    EnvTrace.store(envTrace(), Ordering::Relaxed);
+  }
+  EnvTrace.load(Ordering::Relaxed)
+}
+
+/// Extracts the per-call `trace` flag a `Call` / `CallPointer` request carries.
+///
+/// All other request variants (`Alloc`, `Free`, `ReadMemory`, …) have no
+/// `trace` field — for them trace is governed solely by the env var, since
+/// the Runtime-side hook in `sendRawRequest` already logged what was sent.
+#[inline]
+const fn requestTraceFlag(request: &FFIRequest) -> bool
+{
+  match request {
+    FFIRequest::Call { trace, .. } | FFIRequest::CallPointer { trace, .. } => *trace,
+    _ => false
+  }
+}
+
+/// True when the clone side should log this request — either `ChillffiTrace`
+/// is on (env-var-controlled coarse trace, covers every request) or this
+/// specific `Call`/`CallPointer` carries `trace: true` (per-call opt-in,
+/// propagated from `.trace()` / `Scope::setTrace` on the Runtime side).
+#[inline]
+fn shouldTraceClone(request: &FFIRequest) -> bool
+{
+  cloneEnvTrace() || requestTraceFlag(request)
+}
+
 // =================================================================================================
 
 /// Callback registry inside the clone (not parent).
@@ -769,12 +822,22 @@ pub fn executeFFI(
   cache: &mut FxHashMap<String, Library>
 ) -> Result<Value, FFIError>
 {
+  // Clone-side trace: log the request before dispatch (the full Debug view
+  // is what makes a hang / crash in the C side interpretable — the last
+  // `recv` line in stderr is exactly what the clone was doing when it died).
+  // `request` is borrowed here; the match below moves it.
+  let traceOn: bool = shouldTraceClone(&request);
+  if traceOn {
+    eprintln!("[chillffi:clone] recv {:?}", request);
+  }
+
+  let result: Result<Value, FFIError> = (|| -> Result<Value, FFIError> {
   match request
   {
-    FFIRequest::Call { libraryPath, functionName, args, resultType, readErrno, fixedArgs } =>
+    FFIRequest::Call { libraryPath, functionName, args, resultType, readErrno, trace: _, fixedArgs } =>
       executeCall(libraryPath, functionName, args, resultType, cache, readErrno, fixedArgs),
 
-    FFIRequest::CallPointer { pointer, args, resultType, readErrno } =>
+    FFIRequest::CallPointer { pointer, args, resultType, readErrno, trace: _ } =>
       executeCallPointer(pointer, args, resultType, readErrno),
 
     FFIRequest::Alloc { length } => {
@@ -899,6 +962,19 @@ pub fn executeFFI(
       Ok(Value::None)
     }
   }
+  })();
+
+  // Trace exit: pair with the `recv` log above. Logging the result kind
+  // (Ok value / Err variant) — not the whole request again — keeps the
+  // line scannable while still telling you what the clone produced.
+  if traceOn {
+    match &result {
+      Ok(v) => eprintln!("[chillffi:clone] done ok  {:?}", v),
+      Err(e) => eprintln!("[chillffi:clone] done err {:?}", e)
+    }
+  }
+
+  result
 }
 
 /// Executes inside the forked zygote worker, not the Zygote itself;

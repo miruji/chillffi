@@ -64,6 +64,13 @@ pub enum FFIRequest
   /// returns and reports it back via [`FFIResponse::Ok`]'s second field. Costs one
   /// extra read when set — calls that don't need it can leave it `false`.
   ///
+  /// `trace`: when true, the clone prints a one-line log of the library, function,
+  /// args and result (or error) of this call to stderr. The Runtime side always
+  /// traces when any of the trace policy layers (per-call / scope / global /
+  /// `ChillffiTrace`) is on — this flag is what makes the *clone* side log too,
+  /// so a single `.trace()` reaches the forked worker without any IPC protocol
+  /// change beyond this field. See [`crate::tracePolicy`].
+  ///
   /// `fixedArgs`: variadic-call marker. `Some(n)` means a C-style varargs
   /// function whose first `n` builder arguments (`.arg()` calls) are fixed
   /// and everything after them is variadic (`...`) — the clone then prepares
@@ -76,6 +83,7 @@ pub enum FFIRequest
     args: Vec<Value>,
     resultType: Type,
     readErrno: bool,
+    trace: bool,
     fixedArgs: Option<usize>
   },
 
@@ -120,17 +128,22 @@ pub enum FFIRequest
   /// Calls a function directly by its raw memory pointer
   /// with the provided arguments and expected return type.
   ///
-  /// `readErrno`: see [`FFIRequest::Call`].
+  /// `readErrno`: see [`FFIRequest::Call`]. `trace`: see [`FFIRequest::Call`].
   CallPointer {
     pointer: usize,
     args: Vec<Value>,
     resultType: Type,
-    readErrno: bool
+    readErrno: bool,
+    trace: bool
   }
 }
 
 /// Response to the request with the execution result or error.
-#[derive(Serialize, Deserialize)]
+///
+/// `Debug` is derived so the trace hooks ([`crate::tracePolicy`]) can format
+/// a response the Runtime just received over IPC the same way they format
+/// the request that produced it — `{:?}` on either side Just Works.
+#[derive(Debug, Serialize, Deserialize)]
 pub enum FFIResponse
 {
   /// Successful execution with the returned value, plus `errno` and — on
