@@ -815,7 +815,9 @@ mod tests
     let result: Pointer = ffi!(|scope| {
       scope.addSearchPath(&scopeDir);
       let lib: Library = scope.load(libName)?;
-      lib.call("print").arg("priority test\n").result() // todo It goes outside the test bounds
+      // Empty payload: we only need a successful call to prove the scope path
+      // won over the global garbage — avoid printing into cargo test output.
+      lib.call("print").arg("").result()
     }).expect("scope path should have taken priority over the global one");
 
     assert!(matches!(result, Pointer(0)));

@@ -827,7 +827,7 @@ pub fn executeFFI(
   // `recv` line in stderr is exactly what the clone was doing when it died).
   // `request` is borrowed here; the match below moves it.
   let traceOn: bool = shouldTraceClone(&request);
-  if traceOn {
+  if traceOn && !cfg!(test) {
     eprintln!("[chillffi:clone] recv {:?}", request);
   }
 
@@ -967,7 +967,7 @@ pub fn executeFFI(
   // Trace exit: pair with the `recv` log above. Logging the result kind
   // (Ok value / Err variant) — not the whole request again — keeps the
   // line scannable while still telling you what the clone produced.
-  if traceOn {
+  if traceOn && !cfg!(test) {
     match &result {
       Ok(v) => eprintln!("[chillffi:clone] done ok  {:?}", v),
       Err(e) => eprintln!("[chillffi:clone] done err {:?}", e)

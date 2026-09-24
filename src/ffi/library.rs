@@ -142,7 +142,7 @@ pub(super) fn sendRawRequest(request: FFIRequest) -> Result<Value, FFIError>
       FFIRequest::Call { trace, .. } | FFIRequest::CallPointer { trace, .. } => *trace,
       _ => resolveTrace(None)
     };
-  if traceOn {
+  if traceOn && !cfg!(test) {
     eprintln!("[chillffi] send {:?}", request);
   }
 
@@ -167,8 +167,10 @@ pub(super) fn sendRawRequest(request: FFIRequest) -> Result<Value, FFIError>
   // response (Ok value / Err variant) — or the IPC-level communication
   // failure if the clone died before replying — closes the loop on what
   // the parent process observed for this request.
-  if traceOn {
-    match &responseResult {
+  if traceOn && !cfg!(test) 
+  {
+    match &responseResult 
+    {
       Ok(FFIResponse::Ok(val, errno, osError)) =>
         eprintln!("[chillffi] recv ok  {:?} errno={:?} osError={:?}", val, errno, osError),
       Ok(FFIResponse::Err(err)) =>
