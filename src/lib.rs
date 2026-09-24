@@ -120,6 +120,43 @@
 //! 4. In case of errors, the supervisor intercepts the worker crash and returns
 //!    the error to Rust, keeping your application stable.
 //!
+//! # Concurrency limit (fork-bomb protection)
+//!
+//! Each `ffi!{}` block creates a clone of the Main Zygote. With no
+//! coordination between threads, `N` concurrent `ffi!{}` blocks produce
+//! `N` live clones — and a workload that opens more of them in parallel
+//! than the OS allows is a fork-bomb: the next clone attempt returns
+//! `EAGAIN` (Unix) or `ERROR_MAX_THRDS` (Windows), and the call surfaces
+//! as `SpawnFailed`. Worse, those `N` clones count against the
+//! **per-user** limit (`RLIMIT_NPROC` on Linux/macOS), shared with the
+//! shell, system daemons, and any **other** chillffi process running
+//! under the same user.
+//!
+//! chillffi installs a single global counting semaphore
+//! ([`limits::configure`] / [`limits::current`]) that caps the number
+//! of simultaneously live clones. Reaching the cap **blocks** the next
+//! `ffi!{}` block — it does not error. The cap is computed at first use
+//! from the OS-imposed per-user and system-wide thread limits
+//! (Linux `RLIMIT_NPROC` + `/proc/sys/kernel/threads-max`; macOS
+//! `RLIMIT_NPROC` + `sysctl kern.maxproc`; Windows conservative
+//! constant), minus a buffer of 16 processes left for the shell and
+//! any other chillffi instance under the same user, clamped to a
+//! recommended hard cap of 32.
+//!
+//! Live counts are exposed in [`stats`]: `activeClones()`,
+//! `availableSlots()`, `zygotesAlive()`, `hotAlive()`.
+//!
+//! ## Known limitation (0.4)
+//!
+//! The `zygotePool > 1` (multiple Main Zygotes ready to fork) and
+//! `hotPool > 0` (long-lived clone workers reused between `ffi!{}`
+//! blocks) cases are accepted by [`limits::configure`] for forward
+//! compatibility but **not yet acted on** — chillffi still runs with a
+//! single Main Zygote and creates a fresh clone per `ffi!{}` block. The
+//! fields are recorded and validated so a future 0.x can wire them up
+//! without a breaking change to this module. Tracked as `todo` at the
+//! top of `src/zygote.rs` (sections 1 and 2 of the existing plan).
+//!
 //! <div class="warning">
 //!
 //! This does not protect you from the FFI code running inside the isolated process.
@@ -180,6 +217,8 @@ mod platform;
 pub mod ffi;
 pub mod pathResolver;
 pub mod errnoPolicy;
+pub mod limits;
+pub mod stats;
 
 // =================================================================================================
 

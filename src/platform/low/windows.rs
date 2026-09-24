@@ -1060,3 +1060,65 @@ pub fn deallocate(pointer: *mut c_void) -> ()
 }
 
 // =================================================================================================
+
+/// Cross-platform shape of an OS-imposed process / thread cap
+/// (see [`detectProcessLimits`]).
+///
+/// On Unix this is filled from `getrlimit(RLIMIT_NPROC)` and
+/// `kernel.threads-max` / `kern.maxproc`. On Windows there is no stable
+/// per-user process cap exposed through the Win32 / NtAPI surface, so the
+/// `user*` fields are `None`; the conservative constant for `systemHard`
+/// is the documented desktop-Windows ceiling on **desktop** SKUs (Server
+/// SKUs allow far more, and `GetSystemInfo` reports no such cap).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct OsProcessLimits
+{
+  pub userSoft: Option<u64>,
+  pub userHard: Option<u64>,
+  pub systemHard: Option<u64>
+}
+
+/// Conservative desktop-Windows ceiling on processes. The actual ceiling
+/// depends on the edition (Server SKUs are essentially unbounded up to
+/// commit charge) — chillffi still applies a buffer on top of this and
+/// lets the user override it via [`crate::limits::configure`].
+const WindowsConservativeProcessCap: u64 = 2048;
+
+/// Best-effort read of the OS-imposed process / thread caps on Windows.
+///
+/// Windows does not expose a per-user process limit through a stable API
+/// (`GetSystemInfo` does not report one; `NtQuerySystemInformation` with
+/// `SystemProcessInformation` would let us count existing processes, but
+/// the kernel ceiling is governed by commit charge and edition, not a
+/// fixed number). We therefore return a conservative constant for
+/// `systemHard` and `None` for the per-user fields.
+///
+/// The real ceiling is whatever the kernel+commit-charge allows; chillffi
+/// still benefits from the buffer ([`crate::limits::defaultBuffer`]).
+pub fn detectProcessLimits() -> OsProcessLimits
+{
+  OsProcessLimits {
+    userSoft: None,
+    userHard: None,
+    systemHard: Some(WindowsConservativeProcessCap)
+  }
+}
+
+// =================================================================================================
+
+// Entry points that a future refinement of `detectProcessLimits` would use
+// to count currently-alive processes via `NtQuerySystemInformation`. Kept
+// here so the refinement does not have to re-discover the names; declared
+// `extern "system"` so they link correctly against ntdll.dll when used.
+extern "system"
+{
+  #[allow(dead_code)]
+  fn NtQuerySystemInformation(
+    SystemInformationClass: u32,
+    SystemInformation: *mut c_void,
+    SystemInformationLength: u32,
+    ReturnLength: *mut u32
+  ) -> i32;
+}
+
+// =================================================================================================

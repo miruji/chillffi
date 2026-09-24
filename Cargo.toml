@@ -53,6 +53,16 @@ targets = [
 
 # ======================================================================================================================
 
+# Explicit integration test targets (autotests = false above disables
+# auto-discovery of tests/*.rs). Each entry becomes a separate test
+# binary — which is exactly what the concurrency-limit test needs, since
+# `limits::configure` can only run once per process.
+[[test]]
+name = "concurrencyLimit"
+path = "tests/concurrencyLimit.rs"
+
+# ======================================================================================================================
+
 [profile.release]
 opt-level = 3
 codegen-units = 1

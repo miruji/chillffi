@@ -39,6 +39,8 @@ keeping your main Rust application running.
 | Errno Policy             | ✅ Configuring errno reading at the call, scope, or global level.                    |
 | String data types        | ✅ String (`""`), CString (`c""`), RawString (`b""`).                                |
 | Variadic arguments       | ✅ Support for variable arguments in function calls.                                 |
+| Concurrency limit        | ✅ Caps simultaneously live clones; blocks (not errors) when full. See [`limits`](src/limits.rs) / [`stats`](src/stats.rs). |
+| Live stats               | ✅ `activeClones()`, `availableSlots()`, `zygotesAlive()`, `hotAlive()`.            |
 | Sandbox (FS protection)  | ⏳ [#45](https://github.com/rts-lang/chillffi/issues/45)                             |
 | Libraries from bytes     | ⏳ [#42](https://github.com/rts-lang/chillffi/issues/42)                             |
 
@@ -187,6 +189,122 @@ This is also different from the WASM approach - because we preserve a true nativ
 > Because no one can guarantee that any FFI request will not break your code.
 >
 > Even if you are an experienced programmer, there are things that do not depend on your experience.
+
+## 🧮 Process pools & concurrency limit
+
+Each `ffi!{}` block forks a clone of the Main Zygote. With no coordination
+between threads, `N` concurrent `ffi!{}` blocks produce `N` live clones —
+and a workload that opens more of them in parallel than the OS allows
+becomes a fork-bomb: the next `fork()` returns `EAGAIN` (Unix) or
+`ERROR_MAX_THRDS` (Windows), and the call surfaces as `SpawnFailed`.
+Worse, those `N` clones count against the **per-user** `RLIMIT_NPROC`
+(Linux/macOS), which is shared with the shell, system daemons, and any
+**other** chillffi process running under the same user.
+
+chillffi installs a single global counting semaphore that caps the number
+of simultaneously live clones. Reaching the cap **blocks** the next
+`ffi!{}` block — it does not error.
+
+### The three pools
+
+```text
+zygotePool       ─ Main Zygotes ready to fork a clone on demand.
+                   Default: 1 (today: exactly one Main Zygote per
+                   chillffi process; `> 1` is reserved for future work).
+
+hotPool          ─ Long-lived clone processes kept warm between `ffi!{}`
+                   blocks for low-latency reuse.
+                   Default: 0 (today: every `ffi!{}` block gets a fresh
+                   clone from the Main Zygote and kills it on scope
+                   exit). Reusing a clone across blocks would carry
+                   `dlopen`'d state from one block into the next, which
+                   breaks the "sterile process per FFI block" guarantee;
+                   `> 0` is reserved for the explicit retained-scope API.
+
+concurrencyLimit ─ Hard ceiling on simultaneously live clones, summed
+                   across all threads and all `ffi!{}` blocks in this
+                   chillffi process. Reach it and the next `ffi!{}`
+                   block **waits** for a slot — never errors just
+                   because the limit is full.
+```
+
+### Defaults
+
+The default `concurrencyLimit` is computed at first use from the
+OS-imposed per-user and system-wide thread limits, minus a buffer:
+
+```text
+limit = min(userSoft, systemHard, RECOMMENDED_HARD_CAP) - buffer
+```
+
+Conservative constants:
+
+| Constant                | Value | Why |
+|-------------------------|-------|-----|
+| `RECOMMENDED_HARD_CAP`  | 32    | Above 32 concurrent clones the per-call `fork` + IPC bootstrap starts to dominate wall time on a typical machine, and a single chillffi process should not be able to drown the shell. |
+| `defaultBuffer`         | 16    | Headroom left for the shell, system daemons, and any **other** chillffi instance running under the same user. chillffi does not own the per-user limit. |
+
+OS autodetect sources:
+
+| OS      | Per-user soft              | Per-user hard              | System-wide                          |
+|---------|----------------------------|----------------------------|--------------------------------------|
+| Linux   | `getrlimit(RLIMIT_NPROC)`  | `getrlimit(RLIMIT_NPROC)`  | `/proc/sys/kernel/threads-max`       |
+| macOS   | `getrlimit(RLIMIT_NPROC)`  | `getrlimit(RLIMIT_NPROC)`  | `sysctl(kern.maxproc)`                |
+| Windows | not exposed                | not exposed                | conservative constant (2048)         |
+
+| OS      | Typical soft | Hard limit     | Error at the limit     |
+|---------|--------------|----------------|------------------------|
+| Linux   | 1024–14248   | 14248–65000    | `EAGAIN`               |
+| macOS   | 256–1064     | 2048           | `EAGAIN`               |
+| Windows | ~1000–2000   | depends on SKU | `ERROR_MAX_THRDS`      |
+
+### Recommended configurations
+
+- **Default (do nothing):** `16/32` semantics — a buffer of 16 and a cap
+  of 32. Conservative, good for most workloads.
+- **Above 32:** set `concurrencyLimit` higher only if you understand the
+  per-call cost and your system has the headroom. This is "at your own
+  risk" territory — the per-user `RLIMIT_NPROC` is the real wall and
+  chillffi will not stop you from running into it.
+- **Below 16:** perfectly safe; `concurrencyLimit = 1` serialises every
+  `ffi!{}` block, which is sometimes what you want for a workload that is
+  not parallelisable anyway.
+
+### Inspecting & overriding
+
+```rust
+use chillffi::limits;
+use chillffi::stats;
+
+// Inspect (works after the first ffi!{} block; reflects auto-detected
+// defaults if configure() was never called):
+let l = *limits::current();
+println!("zygotePool={}, hotPool={}, concurrencyLimit={}",
+  l.zygotePool, l.hotPool, l.concurrencyLimit);
+
+// Live counters (lock-free, safe on hot paths):
+println!("activeClones={} ({} free), zygotesAlive={}, hotAlive={}",
+  stats::activeClones(),
+  stats::availableSlots(),
+  stats::zygotesAlive(),
+  stats::hotAlive());
+
+// Override (call once, before the first ffi!{} block):
+limits::configure(limits::Limits {
+  zygotePool: 1,
+  hotPool: 0,
+  concurrencyLimit: 8
+}).expect("invalid limits");
+```
+
+### Known limitation (0.4)
+
+`zygotePool > 1` and `hotPool > 0` are accepted by `limits::configure`
+for forward compatibility but **not yet acted on** — chillffi still runs
+with a single Main Zygote and creates a fresh clone per `ffi!{}` block.
+The fields are recorded and validated so a future 0.x can wire them up
+without a breaking change to the public API. Tracked as `todo` at the
+top of `src/zygote.rs` (sections 1, 2, and 4 of the existing plan).
 
 ## 📄 License
 

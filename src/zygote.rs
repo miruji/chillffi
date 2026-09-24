@@ -9,16 +9,32 @@
 //! 4. hands out clone handles to callers via [`ClonedZygote::getMeClone`].
 //!
 //! All IPC details are hidden behind the [`ipc::Transport`] trait.
+//!
+//! # Concurrency limit
+//!
+//! [`ClonedZygote::getMeClone`] acquires a permit from the global
+//! counting semaphore installed by [`crate::limits`] **before** asking
+//! the Main Zygote to fork. If the configured `concurrencyLimit` is
+//! reached, the call **blocks** until a slot frees up — it does not
+//! error. The permit is released when the `ClonedZygote` is dropped
+//! (which also kills the clone process). This is the single mechanism
+//! that keeps a parallel `ffi!{}` workload from turning into a
+//! fork-bomb under the per-user `RLIMIT_NPROC`.
+//!
+//! See [`crate::limits`] for the configuration surface and
+//! [`stats`] for live counters.
 // =================================================================================================
 pub use crate::platform::ipc::{FFIRequest, FFIResponse, ZygoteFlag};
 use crate::platform::ipc::{RuntimeSide as RuntimeSideTrait, Transport as TransportTrait};
 use crate::platform::low;
+use crate::limits::Permit;
 use parking_lot::{Mutex, MutexGuard};
 use std::cell::RefCell;
 use std::env;
 use std::io;
 use std::sync::OnceLock;
 use std::thread;
+use crate::stats;
 // =================================================================================================
 
 #[cfg(target_os = "linux")]
@@ -54,6 +70,13 @@ pub use crate::platform::ipc::windows::runAsClone;
        it still declares them and they exist inside,
        although they will never be used.
        In some way, exec() and ctor solve this, but this solution fully solves it.
+    4. Pool expansion — `zygotePool > 1` (multiple Main Zygotes ready to fork)
+       and `hotPool > 0` (long-lived clone workers reused between `ffi!{}` blocks)
+       are accepted by `limits::configure` for forward compatibility but not
+       yet acted on. The concurrency-limit semaphore already accounts for
+       the `Main Zygotes count against the ceiling while they clone` rule
+       (see `limits::configure` validation); the actual multi-zygote /
+       retained-clone wiring is the future work tracked here.
 */
 
 // =================================================================================================
@@ -83,20 +106,41 @@ pub static ZygoteState: OnceLock<Mutex<ZygoteHandle>> = OnceLock::new();
 // =================================================================================================
 
 /// RAII handle for a separate zygote clone process.
+///
+/// Carries the concurrency-limit permit acquired at construction time;
+/// dropping it (or having it killed by a crashed clone path) releases
+/// the slot back to the semaphore, unblocking the next waiter.
 pub struct ClonedZygote
 {
   /// Process PID.
   pub pid: u32,
 
   /// Platform-specific Runtime-side data endpoint.
-  pub(super) data: ipc::RuntimeSide
+  pub(super) data: ipc::RuntimeSide,
+
+  /// Concurrency-limit permit. Held for the lifetime of this clone;
+  /// `Drop` releases it. Field order matters for drop order: the permit
+  /// must outlive the IPC channels so a waiter woken by the permit
+  /// release does not race with the channel `Drop`s.
+  _permit: Permit<'static>
 }
 
 impl ClonedZygote
 {
   /// Requests a clone from the main zygote and returns its RAII handle.
+  ///
+  /// **Blocks** until the global concurrency limit (see [`crate::limits`])
+  /// has a free slot — does **not** error just because the limit is full.
+  /// Errors only when the Main Zygote itself is broken (not initialised,
+  /// control channel dead, or it returned `pid=0`).
   pub fn getMeClone() -> io::Result<Self>
   {
+    // Acquire the concurrency-limit permit *before* touching the Main
+    // Zygote. This is the single chokepoint that keeps parallel `ffi!{}`
+    // blocks from racing past `RLIMIT_NPROC`. The permit is released
+    // when this `ClonedZygote` is dropped — see the `_permit` field.
+    let permit: Permit<'static> = crate::limits::acquirePermit();
+
     let mutex: &Mutex<ZygoteHandle> = ZygoteState.get().ok_or_else(|| {
       io::Error::new(io::ErrorKind::NotFound, "Zygote not initialized")
     })?;
@@ -131,7 +175,12 @@ impl ClonedZygote
         bootstrap
       )?;
 
-    Ok(Self { pid, data })
+    // Count this clone as live *after* we know it really exists — the
+    // stats counter is for "processes that are about to enter or are
+    // running an FFI request", not "permit we hold".
+    stats::onCloneSpawned();
+
+    Ok(Self { pid, data, _permit: permit })
   }
 
   /// FFI call inside a specific clone.
@@ -145,10 +194,16 @@ impl ClonedZygote
 impl Drop for ClonedZygote
 {
   /// When drop() is called, the clone is immediately killed,
-  /// the main zygote is not affected.
+  /// the main zygote is not affected. The concurrency-limit permit
+  /// (held in `_permit`) is released after the kill — drop order runs
+  /// fields in declaration order, so the IPC channels and the process
+  /// handle (inside `data`) are dropped first, then the permit wakes the
+  /// next waiter. The order matters: a waiter woken before the kill
+  /// would race the freed PID.
   fn drop(&mut self) -> ()
   {
     low::killProcess(self.pid);
+    stats::onCloneDropped();
   }
 }
 
@@ -215,6 +270,14 @@ pub fn initZygote() -> io::Result<()>
     .map_err(|_| {
       io::Error::new(io::ErrorKind::AlreadyExists, "Zygote already initialized")
     })?;
+
+  // Count this Main Zygote as live. The supervisor will decrement when
+  // it retires a dead one (in `supervisorLoop`) and increment again
+  // when it has spawned the replacement — so `stats::zygotesAlive()`
+  // reflects the *currently running* Main Zygotes, not the historical
+  // total.
+  stats::onZygoteSpawned();
+
   thread::spawn(supervisorLoop);
   Ok(())
 }
@@ -245,10 +308,20 @@ fn supervisorLoop() -> ()
     let mut guard: MutexGuard<ZygoteHandle> = mutex.lock();
     if guard.pid() == pidToWait // Not recreated in parallel yet through call()
     {
+      // The Main Zygote we were watching is gone. Retire it from the
+      // live counter *before* spawning the replacement so a reader
+      // never sees a stale +1.
+      stats::onZygoteRetired();
+
       match initZygoteInner()
       {
         Ok(newHandle) =>
         {
+          // `initZygoteInner` does not bump the counter (it is the
+          // "raw spawn" path used by the supervisor); the supervisor
+          // bumps it itself, here, so the counter reflects exactly the
+          // live Main Zygote.
+          stats::onZygoteSpawned();
           *guard = newHandle;
         }
         Err(_) =>
@@ -263,6 +336,10 @@ fn supervisorLoop() -> ()
 
 /// Re-spawns the Main Zygote without re-initializing the [`ZygoteState`]
 /// (used by the supervisor after a crash).
+///
+/// Does **not** bump the live-zygote counter — that is the supervisor's
+/// responsibility, so the counter reflects exactly the live Main Zygote
+/// even across restart races.
 fn initZygoteInner() -> io::Result<ZygoteHandle>
 {
   let inner: ipc::ZygoteHandle =
@@ -379,6 +456,11 @@ mod tests
   /// `fork` and handed over via `IpcOneShotServer`; this test keeps
   /// pressure on that path so a regression cannot hide behind
   /// sequential-only runs.
+  ///
+  /// With the concurrency limit installed (default `32` here, with the
+  /// buffer subtracted on Linux), 8 threads × 20 iterations is well
+  /// below the cap — this test exercises the *non-blocking* path of
+  /// the semaphore.
   #[test]
   fn concurrentCloneStress() -> ()
   {
