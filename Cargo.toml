@@ -118,7 +118,7 @@ bytemuck = { version = "1.25.2", features = ["derive"] }
 # Zero-cost casting of POD types. Used for static repr structures
 # (readStruct<T>) to safely reinterpret raw bytes as typed structs.
 
-ipc-channel = "0.23.0"
+ipc-channel = { git = "https://github.com/miruji/ipc-channel.git", branch = "add/linux-abstract-ns" }
 # Cross-platform IPC:
 # - Unix sockets + SCM_RIGHTS on Linux;
 # - Mach ports on macOS;
