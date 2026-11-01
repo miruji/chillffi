@@ -12,8 +12,10 @@ use parking_lot::lock_api::MutexGuard;
 use parking_lot::{Mutex, RawMutex};
 use std::any::Any;
 use std::cell::Cell;
+use std::cell::RefCell;
 use std::ffi::c_void;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use crate::platform::low;
 // =================================================================================================
 
@@ -777,6 +779,12 @@ pub fn executeFFI(
     FFIRequest::CallPointer { pointer, args, resultType, readErrno } =>
       executeCallPointer(pointer, args, resultType, readErrno),
 
+    FFIRequest::PrepareFunction { libraryPath, functionName, argTypes, resultType } =>
+      executePrepareFunction(libraryPath, functionName, argTypes, resultType, cache),
+
+    FFIRequest::CallPrepared { handle, args, readErrno } =>
+      executeCallPrepared(handle, args, readErrno),
+
     FFIRequest::Alloc { length } => {
       let ptr: *mut c_void = low::allocate(length);
       if ptr.is_null() { return Err(FFIError::Other("allocation returned null".to_string())); }
@@ -895,6 +903,187 @@ pub fn executeFFI(
     }
   }
 }
+
+// =================================================================================================
+
+/// A prepared function inside the clone: the symbol address resolved once
+/// (`dlsym`) and a libffi call interface built once (`ffi_prep_cif`).
+///
+/// Lives as long as the clone itself — i.e. the `ffi!` scope — exactly the
+/// lifetime the library cache has, so the code pointer stays valid for as
+/// long as the handle can be reached from the Runtime side.
+struct PreparedFunction
+{
+  /// Resolved address of the function inside the loaded library.
+  codePointer: usize,
+
+  /// Ready call interface; reused by every call (`Cif::call` takes `&self`).
+  cif: Cif,
+
+  /// Signature pinned at prepare time; validated against every call's args.
+  argTypes: Box<[Type]>,
+
+  /// Expected return type, used to decode the raw result into a `Value`.
+  resultType: Box<Type>
+}
+
+/// Counter for assigning unique identifiers to prepared functions.
+/// Clone-local by construction: every clone is a separate process.
+static NextPreparedId: AtomicUsize = AtomicUsize::new(1);
+
+thread_local! {
+  /// Prepared-function registry of this clone. The clone's request loop is
+  /// single-threaded, and the whole process — the registry with it — dies
+  /// when the Runtime closes the channel, so a thread-local is sufficient
+  /// and keeps `Cif` out of `Send` requirements.
+  static PreparedFunctions: RefCell<FxHashMap<usize, PreparedFunction>> =
+    RefCell::new(FxHashMap::default());
+}
+
+/// Prepares a function inside the clone: resolves the symbol once, builds the
+/// `Cif` once, stores both under a handle. The library goes through the same
+/// lazy `dlopen` cache the `Call` path uses, so its lifetime (the clone's)
+/// keeps the resolved symbol valid. Returns `Value::Usize(handle)`.
+fn executePrepareFunction(
+  libraryPath: String,
+  functionName: String,
+  argTypes: Vec<Type>,
+  resultType: Type,
+  cache: &mut FxHashMap<String, Library>
+) -> Result<Value, FFIError>
+{
+  // Same lazy load-or-reuse the Call path performs — first prepare loads
+  // the library, everything after (including plain Calls) reuses it.
+  if !cache.contains_key(&libraryPath)
+  {
+    let lib: Library = unsafe{
+      Library::new(&libraryPath)
+        .map_err(|e| FFIError::LibraryLoadFailed {
+          libraryPath: libraryPath.clone(),
+          message: e.to_string()
+        })?
+    };
+    cache.insert(libraryPath.clone(), lib);
+  }
+  let library: &Library = cache.get(&libraryPath).unwrap();
+
+  // One-time symbol resolution.
+  let functionPointer: *mut c_void =
+    unsafe{
+      *library
+        .get::<*mut c_void>(functionName.as_bytes())
+        .map_err(|_| FFIError::SymbolNotFound {
+          functionName: functionName.clone()
+        })?
+    };
+
+  // One-time CIF preparation from the pinned signature.
+  let cif: Cif = buildCif(&argTypes, &resultType)?;
+
+  let handle: usize = NextPreparedId.fetch_add(1, Ordering::Relaxed);
+  PreparedFunctions.with(|registry| {
+    registry.borrow_mut().insert(handle, PreparedFunction {
+      codePointer: functionPointer as usize,
+      cif,
+      argTypes: argTypes.into_boxed_slice(),
+      resultType: Box::new(resultType)
+    });
+  });
+
+  Ok(Value::Usize(handle))
+}
+
+/// Checks a runtime `Value` against a declared signature `Type` — the
+/// signature pinned at prepare time. A mismatch here would be UB once the
+/// call goes through the pinned CIF, so every prepared call validates first.
+///
+/// `Value::String` (ptr + len) expands to two C ABI slots and has no `Type`
+/// counterpart, so it never matches — pass `RawString`/`CString` against
+/// `Type::Pointer` or an explicit `(Pointer, Usize)` signature instead.
+fn valueMatchesType(value: &Value, t: &Type) -> bool
+{
+  match (t, value)
+  {
+    (Type::None, Value::None) => true,
+    (Type::U8, Value::U8(_)) => true,
+    (Type::U16, Value::U16(_)) => true,
+    (Type::U32, Value::U32(_)) => true,
+    (Type::U64, Value::U64(_)) => true,
+    (Type::Usize, Value::Usize(_)) => true,
+    (Type::I8, Value::I8(_)) => true,
+    (Type::I16, Value::I16(_)) => true,
+    (Type::I32, Value::I32(_)) => true,
+    (Type::I64, Value::I64(_)) => true,
+    (Type::Isize, Value::Isize(_)) => true,
+    (Type::F32, Value::F32(_)) => true,
+    (Type::F64, Value::F64(_)) => true,
+    (Type::Bool, Value::Bool(_)) => true,
+    (Type::Pointer, Value::Pointer(_)) => true,
+    (Type::Pointer, Value::RawString(_) | Value::CString(_) | Value::Function(_)) => true,
+    (Type::Struct(fields), Value::Struct(values)) =>
+      fields.len() == values.len() &&
+      fields.iter().zip(values.iter()).all(|(f, v)| valueMatchesType(v, f)),
+    _ => false
+  }
+}
+
+/// Calls a function prepared earlier via `executePrepareFunction`: the symbol
+/// address and the CIF already exist, so the per-call work is argument
+/// validation + marshaling + the call itself — no `dlsym`, no `ffi_prep_cif`.
+fn executeCallPrepared(
+  handle: usize,
+  args: Vec<Value>,
+  readErrno: bool
+) -> Result<Value, FFIError>
+{
+  // Reject Value::None arguments the same way the regular paths do.
+  for (index, arg) in args.iter().enumerate()
+  {
+    if matches!(arg, Value::None) {
+      return Err(FFIError::BadArgument(format!(
+        "Cannot pass Value::None as argument at index {index}"
+      )));
+    }
+  }
+
+  let result: Value = PreparedFunctions.with(|registry| {
+    let registry = registry.borrow();
+    let prepared: &PreparedFunction = registry.get(&handle).ok_or_else(|| FFIError::Other(
+      format!("callPrepared: unknown function handle {handle} (prepared functions die with the clone that made them)")
+    ))?;
+
+    // The pinned CIF is fixed — passing anything else than the declared
+    // signature would be UB, so validate every argument first.
+    if args.len() != prepared.argTypes.len() {
+      return Err(FFIError::BadArgument(format!(
+        "callPrepared: signature expects {} arguments, got {}",
+        prepared.argTypes.len(), args.len()
+      )));
+    }
+    for (index, (arg, declared)) in args.iter().zip(prepared.argTypes.iter()).enumerate() {
+      if !valueMatchesType(arg, declared) {
+        return Err(FFIError::BadArgument(format!(
+          "callPrepared: argument {index} ({arg:?}) does not match declared type {declared:?}"
+        )));
+      }
+    }
+
+    // Same tail as the regular path: marshal args, call, decode.
+    let mut storage: Vec<Box<dyn Any>> = Vec::with_capacity(args.len());
+    let argsFfi: Vec<Arg> = prepareFFIArgs(&args, &mut storage)?;
+    let codePointer: CodePtr = CodePtr(prepared.codePointer as *mut c_void);
+    invokeFFI(&prepared.cif, codePointer, &argsFfi, &prepared.resultType, readErrno)
+  })?;
+
+  // Same panic-in-callback guard the regular paths apply (see invokeAtPointer).
+  if CallbackPanicked.replace(false) {
+    return Err(FFIError::Other("a registered callback panicked during the call".to_string()));
+  }
+
+  Ok(result)
+}
+
+// =================================================================================================
 
 /// Executes inside the forked zygote worker, not the Zygote itself;
 ///

@@ -58,6 +58,8 @@ pub const ZygoteFlag: &str = "__zygote";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FFIRequest
 {
+  // ===============================================================================================
+  
   /// Calls a function from a dynamic library with the given arguments and expected return type.
   ///
   /// `readErrno`: when true, the clone reads `errno` immediately after the C call
@@ -79,35 +81,48 @@ pub enum FFIRequest
     fixedArgs: Option<usize>
   },
 
+  // ===============================================================================================
+
   /// Allocates a block of memory of the specified length in the zygote address space.
   Alloc { length: usize },
+  
   /// Allocates enough memory to hold a dynamically-shaped struct — the byte
   /// size (with correct platform padding/alignment) is computed by `libffi`
   /// on the clone side from `fields`, not guessed by the caller. Response
   /// carries both the pointer and the resolved size (see `executeFFI`).
   AllocDynamicStruct { fields: Vec<Type> },
+  
   /// Allocates a block of memory with specific alignment.
   /// Uses `posix_memalign` under the hood — alignment must be a power of 2.
   AllocAligned { length: usize, alignment: usize },
+  
   /// Frees a previously allocated memory block by its pointer.
   Free { pointer: usize },
 
+  // ===============================================================================================
+
   /// Reads a raw memory block of the given length starting at the specified pointer.
   ReadMemory { pointer: usize, length: usize },
+  
   /// Writes a value to the specified address in the zygote memory.
   WriteMemory { pointer: usize, value: Value },
+
+  // ===============================================================================================
 
   /// Reads a dynamically-typed struct at `pointer`. Field byte offsets
   /// (padding, alignment) are computed by `libffi` for the current ABI,
   /// not assumed — this is what makes [`Type::Struct`] usable for shapes
   /// that don't exist as a Rust type at compile time.
   ReadDynamicStruct { pointer: usize, fields: Vec<Type> },
+  
   /// Writes `values` into a dynamically-typed struct at `pointer`.
   WriteDynamicStruct {
     pointer: usize,
     fields: Vec<Type>,
     values: Vec<Value>
   },
+
+  // ===============================================================================================
 
   /// Parent sends a serialized closure; the clone deserializes and stores it.
   RegisterCallback {
@@ -117,6 +132,7 @@ pub enum FFIRequest
     argTypes: Vec<Type>,
     returnType: Type
   },
+  
   /// Calls a function directly by its raw memory pointer
   /// with the provided arguments and expected return type.
   ///
@@ -126,7 +142,42 @@ pub enum FFIRequest
     args: Vec<Value>,
     resultType: Type,
     readErrno: bool
+  },
+
+  // ===============================================================================================
+
+  /// Resolves the symbol once (`dlsym`) and prepares the libffi `Cif` once,
+  /// storing both inside the clone under a handle returned to the caller.
+  ///
+  /// The signature is pinned at prepare time and validated against every
+  /// subsequent call's arguments (see [`FFIRequest::CallPrepared`]). The
+  /// prepared entry dies with the clone — i.e. with the `ffi!` scope — the
+  /// same lifecycle the library cache already has.
+  PrepareFunction {
+    libraryPath: String,
+    functionName: String,
+    argTypes: Vec<Type>,
+    resultType: Type
+  },
+  
+  /// Calls a function prepared earlier via [`FFIRequest::PrepareFunction`].
+  ///
+  /// The clone already holds the resolved code pointer and the ready CIF,
+  /// so the per-call work shrinks to argument validation + marshaling +
+  /// the call itself — no `dlsym`, no `ffi_prep_cif`.
+  ///
+  /// The argument `Value`s must match the signature declared at prepare
+  /// time; a mismatch is a `BadArgument` error, never UB. `Value::String`
+  /// (ptr + len) has no `Type` counterpart and cannot appear in a pinned
+  /// signature — pass `RawString`/`CString` against `Type::Pointer` or an
+  /// explicit two-argument `(Pointer, Usize)` signature instead.
+  CallPrepared {
+    handle: usize,
+    args: Vec<Value>,
+    readErrno: bool
   }
+
+  // ===============================================================================================
 }
 
 /// Response to the request with the execution result or error.

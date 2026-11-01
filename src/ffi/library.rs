@@ -490,6 +490,52 @@ impl<'g> Library<'g>
   // There is no variant with `let a = call(`. Because you either expect void, or specify the type.
   // It would be rough to require a different type specification if you can do it directly in `let a:`.
 
+  /// Prepares a function for repeated calls: the clone resolves the symbol
+  /// once (`dlsym`) and builds the libffi call interface once
+  /// (`ffi_prep_cif`), returning a handle; every subsequent
+  /// [`Function::call`] skips both steps.
+  ///
+  /// The signature is pinned here and validated on every call — a mismatch
+  /// is [`FFIError::BadArgument`], never UB. The prepared function lives as
+  /// long as the enclosing `ffi!` scope (the clone), and dies with it.
+  ///
+  /// # Example
+  /// ```ignore
+  /// let sqrt: Function = libm.function("sqrt", &[Type::F64], Type::F64)?;
+  /// let r: f64 = sqrt.callTyped(vec![Value::F64(9.0)])?;
+  /// ```
+  pub fn function(
+    &self,
+    name: &str,
+    argTypes: &[Type],
+    resultType: Type
+  ) -> Result<Function<'g>, FFIError>
+  {
+    if ZygoteState.get().is_none() {
+      return Err(FFIError::ZygoteNotInitialized);
+    }
+
+    let value: Value = sendRawRequest(FFIRequest::PrepareFunction {
+      libraryPath: self.libraryPath.clone(),
+      functionName: name.to_string(),
+      argTypes: argTypes.to_vec(),
+      resultType
+    })?;
+
+    let Value::Usize(handle) = value else {
+      return Err(FFIError::Other(format!(
+        "function {name}: unexpected prepare response {value:?}"
+      )));
+    };
+
+    Ok(Function {
+      handle,
+      name: name.to_string(),
+      argTypes: argTypes.to_vec(),
+      _scope: PhantomData
+    })
+  }
+
   /// Unloads the library and removes it from the registry;
   ///
   /// Here self instead of &self is used so that after removal it is not possible
@@ -505,13 +551,139 @@ impl<'g> Library<'g>
 
 // =================================================================================================
 
+/// A prepared function: a handle to a symbol + libffi call interface already
+/// resolved inside the clone (see [`Library::function`]).
+///
+/// Repeated calls skip `dlsym` and `ffi_prep_cif` per call — the clone only
+/// validates the arguments against the pinned signature, marshals them and
+/// invokes. Bound to the scope that produced it, same as [`Library<'g>`].
+///
+/// Calling mirrors the fluent [`CallBuilder`] style:
+/// `sqrt.call().arg(9.0).result::<f64>()?`.
+#[derive(Debug)]
+pub struct Function<'g>
+{
+  /// Clone-side handle returned by `FFIRequest::PrepareFunction`.
+  handle: usize,
+
+  /// Function name, for diagnostics in errors.
+  name: String,
+
+  /// Signature pinned at prepare time; mirrored parent-side for a local
+  /// arity check that fails fast without an IPC round trip.
+  argTypes: Vec<Type>,
+
+  /// Lifetime marker tying the handle to the scope it was prepared in.
+  _scope: PhantomData<&'g ()>
+}
+
+impl<'g> Function<'g>
+{
+  /// Starts a fluent prepared call. Arguments are checked against the
+  /// pinned signature on both sides (here — arity only; the clone —
+  /// full argument types).
+  pub const fn call(&self) -> PreparedCallBuilder<'_, 'g>
+  {
+    PreparedCallBuilder { f: self, args: Vec::new() }
+  }
+
+  /// Test-only access to the clone-side handle (asserts distinctness).
+  #[cfg(test)]
+  pub(crate) fn handleForTests(&self) -> usize
+  {
+    self.handle
+  }
+}
+
+/// Builder for fluent calls of a [`Function`] — the prepared analogue of
+/// [`CallBuilder`]. The per-call work clone-side is validation + marshaling
+/// + the call itself: no `dlsym`, no `ffi_prep_cif`.
+pub struct PreparedCallBuilder<'a, 'g>
+{
+  /// The prepared function being called.
+  f: &'a Function<'g>,
+
+  /// Arguments collected for the call, in order.
+  args: Vec<Value>
+}
+
+impl<'a, 'g> PreparedCallBuilder<'a, 'g>
+{
+  /// Append one argument. Chainable.
+  #[inline]
+  pub fn arg<T: FfiArg>(mut self, arg: T) -> Self
+  {
+    self.args.push(arg.intoFfiValue().0);
+    self
+  }
+
+  /// Finalize: execute the prepared call and return a typed result.
+  #[inline]
+  pub fn result<T: FfiPrimitive>(self) -> Result<T, FFIError>
+  {
+    let raw: Value = self.finish()?;
+    T::fromFfiValue(Arg(raw))
+  }
+
+  /// Finalize: execute the prepared call and return a struct by value.
+  ///
+  /// No field layout argument here (unlike [`CallBuilder::resultStruct`]):
+  /// the return type was pinned at prepare time and drives the clone-side
+  /// decoding, so there is nothing left to supply per call.
+  #[inline]
+  pub fn resultStruct(self) -> Result<StructValue, FFIError>
+  {
+    let raw: Value = self.finish()?;
+    match raw {
+      Value::Struct(values) => Ok(StructValue::fromValues(values)),
+      other => Err(FFIError::Other(format!(
+        "expected struct return, got {:?}", other
+      )))
+    }
+  }
+
+  /// Finalize: execute the prepared call and discard the result (void).
+  #[inline]
+  pub fn void(self) -> Result<(), FFIError>
+  {
+    self.finish()?;
+    Ok(())
+  }
+
+  /// Sends the `CallPrepared` request after a local arity pre-check.
+  fn finish(self) -> Result<Value, FFIError>
+  {
+    if ZygoteState.get().is_none() {
+      return Err(FFIError::ZygoteNotInitialized);
+    }
+
+    // Local arity pre-check: fail fast without an IPC round trip. The clone
+    // re-checks arity and full argument types anyway.
+    if self.args.len() != self.f.argTypes.len() {
+      return Err(FFIError::BadArgument(format!(
+        "function {}: signature expects {} arguments, got {}",
+        self.f.name, self.f.argTypes.len(), self.args.len()
+      )));
+    }
+
+    sendRawRequest(FFIRequest::CallPrepared {
+      handle: self.f.handle,
+      args: self.args,
+      readErrno: resolveReadErrno(None)
+    })
+  }
+}
+
+// =================================================================================================
+
 #[cfg(test)]
 mod tests
 {
   use crate::ffi;
   use crate::ffi::allocatedMemory::AllocatedMemory;
-  use crate::ffi::library::getRegistry;
+  use crate::ffi::library::{getRegistry, Function};
   use crate::ffi::scope::Scope;
+  use crate::ffi::types::Type;
   use crate::platform::{platformExt, LibcPath, LibmPath, OpenSymbolName, SprintfLibPath, SprintfSymbolName};
   // ===============================================================================================
 
@@ -715,6 +887,89 @@ mod tests
 
     assert_eq!(result, 5);
   }
+
+  // ===============================================================================================
+
+  /// Prepared function: one `dlsym` + one `ffi_prep_cif` inside the clone,
+  /// then repeated calls reuse them. Checks both correctness across repeated
+  /// calls and that different prepared functions get different handles.
+  #[test]
+  fn preparedFunctionRoundtrip() -> ()
+  {
+    let (sum, handleA, handleB): (f64, usize, usize) = ffi!(|scope| {
+      let libm: Library = scope.load(LibmPath)?;
+
+      let sqrt: Function = libm.function("sqrt", &[Type::F64], Type::F64)?;
+      let a: f64 = sqrt.call().arg(9.0).result()?;
+      let b: f64 = sqrt.call().arg(16.0).result()?;
+      let c: f64 = sqrt.call().arg(25.0).result()?;
+
+      let fabs: Function = libm.function("fabs", &[Type::F64], Type::F64)?;
+
+      Ok((a + b + c, sqrt.handleForTests(), fabs.handleForTests()))
+    }).expect("prepared calls failed");
+
+    assert!((sum - 12.0).abs() < 1e-9, "sqrt(9)+sqrt(16)+sqrt(25) != 12: {sum}");
+    assert_ne!(handleA, handleB, "distinct prepared functions must not share a handle");
+  }
+
+  /// A signature mismatch must be a clean `BadArgument`, never UB:
+  /// the pinned CIF is fixed, so an i64 into an f64 signature is rejected.
+  #[test]
+  fn preparedFunctionSignatureMismatch() -> ()
+  {
+    use crate::ffi::errors::FFIError;
+
+    let err: FFIError = ffi!(|scope| {
+      let libm: Library = scope.load(LibmPath)?;
+      let sqrt: Function = libm.function("sqrt", &[Type::F64], Type::F64)?;
+      sqrt.call().arg(9i64).result::<f64>()
+    }).expect_err("i64 into an f64 signature must fail");
+
+    assert!(matches!(err, FFIError::BadArgument(_)), "unexpected error: {err:?}");
+  }
+
+  /// Arity mismatch is caught parent-side, without an IPC round trip.
+  #[test]
+  fn preparedFunctionArityMismatch() -> ()
+  {
+    use crate::ffi::errors::FFIError;
+
+    let err: FFIError = ffi!(|scope| {
+      let libm: Library = scope.load(LibmPath)?;
+      let sqrt: Function = libm.function("sqrt", &[Type::F64], Type::F64)?;
+      sqrt.call().arg(9.0).arg(16.0).result::<f64>()
+    }).expect_err("two args into a one-arg signature must fail");
+
+    assert!(matches!(err, FFIError::BadArgument(_)), "unexpected error: {err:?}");
+  }
+
+  /// A missing symbol is reported at prepare time, not at call time.
+  #[test]
+  fn preparedFunctionSymbolNotFound() -> ()
+  {
+    use crate::ffi::errors::FFIError;
+
+    // The error is extracted inside the block: `Function<'g>` cannot cross
+    // the scope boundary — that is the lifetime gate doing its job.
+    let err: FFIError = ffi!(|scope| {
+      let libm: Library = scope.load(LibmPath)?;
+      Ok(libm.function("thisSymbolDoesNotExistAnywhere", &[Type::F64], Type::F64)
+        .err()
+        .expect("preparing a missing symbol should fail"))
+    }).expect("scope failed");
+
+    assert!(matches!(err, FFIError::SymbolNotFound{ .. }), "unexpected error: {err:?}");
+  }
+
+  /// A prepared function cannot outlive its scope: `Function<'g>` borrows
+  /// the scope's lifetime, so this must not compile. Kept as a comment —
+  /// the borrow checker is the test:
+  /// ```ignore
+  /// fn steal<'a>(f: chillffi::ffi::library::Function<'a>) -> chillffi::ffi::library::Function<'a> { f }
+  /// ```
+  #[allow(unused)]
+  fn preparedFunctionLifetimeIsTheGate() -> () {}
 
   // ===============================================================================================
 
