@@ -103,8 +103,14 @@ impl<'g> AllocatedMemory<'g>
       )));
     }
 
-    // Read raw bytes from zygote memory
-    let bytes: Vec<u8> = self.read()?;
+    // Read only the bytes `T` needs from zygote memory — not the whole block,
+    // which may be much larger than `T`.
+    let bytes: Vec<u8> = sendRawRequest(
+      FFIRequest::ReadMemory {
+        pointer: self.address,
+        length: expectedSize
+      }
+    )?.try_into()?;
     if bytes.len() < expectedSize {
       return Err(FFIError::Other(format!(
         "readStruct: received {} bytes, expected at least {}",

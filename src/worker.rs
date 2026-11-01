@@ -837,14 +837,9 @@ pub fn executeFFI(
       // Only RawString and CString payloads are accepted for memory writes.
       //
       // todo Is this a limitation? Or is this a normal state.
-      //
-      // Value::CString stores bytes WITHOUT the trailing NUL (see From<&CStr>/CString),
-      // but WriteMemory of a C string must place '\0' in the target buffer so that
-      // strlen / C APIs see a valid C string. RawString is copied verbatim.
-      let owned: Vec<u8> = match &value 
+      let bytes: &[u8] = match &value 
       {
-        Value::RawString(v) => v.clone(),
-        Value::CString(v) => v.clone(),
+        Value::RawString(v) | Value::CString(v) => v.as_slice(),
         _ => {
           return Err(FFIError::BadArgument(
             "expected RawString or CString for WriteMemory".to_string(),
@@ -853,7 +848,7 @@ pub fn executeFFI(
       };
 
       // Copy the bytes into the target process memory.
-      unsafe{ std::ptr::copy_nonoverlapping(owned.as_ptr(), pointer as *mut u8, owned.len()); }
+      unsafe{ std::ptr::copy_nonoverlapping(bytes.as_ptr(), pointer as *mut u8, bytes.len()); }
       Ok(Value::None)
     }
 

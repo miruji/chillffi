@@ -224,7 +224,7 @@ pub trait RuntimeSide: Send + 'static
 {
   /// Sends a serialized request. On broken pipe returns an error describing
   /// that the clone has gone away.
-  fn send(&self, request: &FFIRequest) -> Result<(), String>;
+  fn send(&self, request: FFIRequest) -> Result<(), String>;
   
   /// Receives a serialized response. EOF means the clone died (treated as an
   /// error here — `ClonedZygote::call` converts it into a communication-failed

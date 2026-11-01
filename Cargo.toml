@@ -94,7 +94,7 @@ libffi = { version = "5.2.0" }
 # Unlike statically hardcoded wrappers, libffi allows constructing
 # a call on the fly based on a type description, which is good for FFI.
 
-libc = { version = "1.0.0-alpha.4" }
+libc = { version = "=1.0.0-alpha.4" }
 # Process control (fork/kill/waitpid, dladdr) and the raw allocator
 # (malloc/posix_memalign/free, _aligned_malloc on Windows) behind src/sys.
 # Also ENOENT and a couple of other constants used directly in tests.

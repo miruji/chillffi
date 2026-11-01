@@ -357,11 +357,11 @@ impl TransportTrait for Transport
 impl RuntimeSideTrait for RuntimeSide
 {
   /// Sends an FFI request to the clone.
-  fn send(&self, request: &FFIRequest) -> Result<(), String>
+  fn send(&self, request: FFIRequest) -> Result<(), String>
   {
     self
       .requestTx
-      .send(request.clone())
+      .send(request)
       .map_err(|e| {
         format!(
           "Zygote clone IPC failed while sending request: {e} ({})",

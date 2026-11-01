@@ -137,7 +137,7 @@ impl ClonedZygote
   /// FFI call inside a specific clone.
   pub(super) fn call(&self, request: FFIRequest) -> Result<FFIResponse, String>
   {
-    self.data.send(&request)?;
+    self.data.send(request)?;
     self.data.recv()
   }
 }
