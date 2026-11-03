@@ -48,7 +48,7 @@
 //! fn main() -> ()
 //! {
 //!   // clock_gettime(CLOCK_REALTIME, &timespec) — struct out-param via Alloc/ReadMemory,
-//!   // the case a plain Value::Pointer can't cover on its own.
+//!   // the case a plain Pointer can't cover on its own.
 //!   let (secs, nanos): (i64, i64) = ffi!(|scope| {
 //!     let libc: Library = scope.load("libc.so.6")?;
 //!
@@ -225,6 +225,7 @@ fn zygoteEntrypoint() -> ()
 #[doc(hidden)]
 pub mod __ffiInternal 
 {
+  pub use crate::ffi::scope::internal::ScopeGuard;
   pub use crate::zygote::{ClonedZygote, ZygoteGuard};
 }
 
@@ -243,8 +244,8 @@ pub mod __ffiInternal
 macro_rules! ffi
 {
   // `ffi!(|scope| { ... })`. The scope name can be any identifier — the important
-  // thing is that there are no repetitions inside {}. Scope<'g> borrows the
-  // ScopeGuard of this block, therefore AllocatedMemory<'g> and Library<'g>
+  // thing is that there are no repetitions inside `{}`. `Scope<'g>` borrows the
+  // `ScopeGuard` of this block, therefore `AllocatedMemory<'g>` and `Library<'g>`
   // cannot be returned outside — the compiler catches this, not us.
   (|$scopeName:ident| { $($body:tt)* }) => 
   {
@@ -261,9 +262,9 @@ macro_rules! ffi
       let _guard: $crate::__ffiInternal::ZygoteGuard = 
         $crate::__ffiInternal::ZygoteGuard::enter(zygote);
  
-      // ScopeGuard lives strictly within the boundaries of this block; $scopeName borrows it.
-      let _scopeGuard: $crate::ffi::scope::ScopeGuard = $crate::ffi::scope::ScopeGuard::new();
-      let $scopeName = $crate::ffi::scope::Scope::new(&_scopeGuard);
+      // `ScopeGuard` lives strictly within the boundaries of this block; $scopeName borrows it.
+      let _scopeGuard: $crate::__ffiInternal::ScopeGuard = $crate::__ffiInternal::ScopeGuard::new();
+      let $scopeName = _scopeGuard.scope();
  
       // Executing the body
       $($body)*

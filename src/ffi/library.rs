@@ -18,6 +18,7 @@ use std::sync::OnceLock;
 
 /// Counter for assigning unique identifiers to libraries.
 static NextLibraryID: AtomicUsize = AtomicUsize::new(1);
+
 /// Global registry of loaded libraries by their identifiers.
 static RegisteredLibraries: OnceLock<RwLock<FxHashMap<usize, String>>> = OnceLock::new();
 
@@ -159,19 +160,20 @@ fn callById(
 
 // =================================================================================================
 
-/// Handle of a loaded library, bound to the `Scope<'g>` it was loaded through —
+/// Handle of a loaded library, bound to the [`Scope<'g>`](crate::ffi::scope::Scope) it was loaded through —
 /// same model as [`AllocatedMemory<'g>`](crate::ffi::allocatedMemory::AllocatedMemory).
 ///
 /// `Library<'g>` cannot outlive the scope that created it: there is no way to
 /// construct one except via [`Scope::load`](crate::ffi::scope::Scope::load),
-/// which requires a live `Scope<'g>` in the first place. This replaces the old
-/// `__Library<const Allowed: bool>` gate — the lifetime *is* the gate now.
+/// which requires a live [`Scope<'g>`](crate::ffi::scope::Scope) in the first place.
 pub struct Library<'g>
 {
   /// Library identifier.
   libraryId: usize,
+  
   /// Path to the loaded library.
   libraryPath: String,
+  
   /// Phantom lifetime marker tying the handle to the scope it was loaded through.
   _scope: PhantomData<&'g ()>
 }
@@ -213,7 +215,6 @@ impl<'g> Drop for Library<'g>
 // =================================================================================================
 
 /// Builder for fluent FFI calls.
-#[doc(hidden)]
 pub struct CallBuilder<'a, 'g>
 {
   /// The library against which the call is issued.
@@ -232,7 +233,9 @@ pub struct CallBuilder<'a, 'g>
 
 impl<'a, 'g> CallBuilder<'a, 'g>
 {
+  /// Internal constructor: the public entry point is [`Library::call`].
   #[inline]
+  #[doc(hidden)]
   pub fn new(lib: &'a Library<'g>, name: &str) -> Self
   {
     Self {
@@ -356,17 +359,6 @@ impl<'a, 'g> CallBuilder<'a, 'g>
 // =================================================================================================
 
 /// Builder for fluent FFI calls to C-style variadic functions (`...`).
-///
-/// Produced exclusively by [`CallBuilder::variadic`] — the moment the
-/// fixed/variadic boundary is crossed, the chain changes type, so the two
-/// argument kinds can never be mixed up: `VariadicCallBuilder` has no
-/// `.variadic()` of its own and its `.arg()` appends variadic arguments
-/// only. Finalize with `.result()` / `.void()` exactly like [`CallBuilder`].
-///
-/// Note: C applies default argument promotions in the variadic part —
-/// `f32` promotes to `double`, `i8`/`i16` promote to `int`. Pass
-/// already-promoted types (`f64`, `i32`, ...) for variadic arguments.
-#[doc(hidden)]
 pub struct VariadicCallBuilder<'a, 'g>
 {
   /// The fixed-argument builder captured at `.variadic()` time.
@@ -464,8 +456,8 @@ impl<'g> Library<'g>
   }
 
   /// Executes a function call from the loaded library.
-  ///
-  /// todo It should be completely hidden and not work directly
+  //
+  // todo It should be completely hidden and not work directly
   #[inline]
   #[doc(hidden)]
   pub(crate) fn __call<T: FfiPrimitive>(

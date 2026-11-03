@@ -20,17 +20,6 @@ use crate::ffi::types::Value;
 use crate::ffi::types::primitive::Primitive;
 // =================================================================================================
 
-/// Re-exported so macro-generated code can reach these without requiring the
-/// call site to have `serde`/`bincode` directly in scope.
-#[doc(hidden)]
-pub mod __reexport
-{
-  pub use bincode;
-  pub use serde;
-}
-
-// =================================================================================================
-
 /// Object-safe equivalent of `Fn(Args) -> Output`, callable through a trait object.
 ///
 /// Inside this crate it has exactly one instantiation that matters:
@@ -92,7 +81,6 @@ pub mod sealed
 {
   mod private { pub trait Sealed { } }
 
-  #[doc(hidden)]
   pub trait IsScope: private::Sealed
   {
     fn __registerCallback(

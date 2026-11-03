@@ -5,10 +5,14 @@
 #[derive(Debug)]
 pub enum CallError
 {
+  // ===============================================================================================
+  
   /// The argument/return type tag carried in the envelope doesn't match the
   /// tag embedded in the resolved decode function — caught by the target
   /// function itself, before it deserializes anything.
   ArgsOutputMismatch,
+
+  // ===============================================================================================
 
   /// The resolved function's own embedded call-site tag doesn't match the
   /// one in the envelope — caught by the target function itself, before it
@@ -16,10 +20,15 @@ pub enum CallError
   /// actually running the same binary, which this module assumes never happens.
   TypeMismatch { tag: u64 },
 
+  // ===============================================================================================
+
   /// Serialization of the closure or envelope failed.
   Encode(String),
+  
   /// Deserialization of the closure or envelope failed.
   Decode(String)
+
+  // ===============================================================================================
 }
 
 impl std::fmt::Display for CallError

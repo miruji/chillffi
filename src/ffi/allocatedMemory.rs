@@ -12,21 +12,25 @@ use std::marker::PhantomData;
 /// clone via [`Scope::alloc`](crate::ffi::scope::Scope::alloc); Automatically sends a `Free` request 
 /// when going out of scope (`Drop`).
 ///
-/// Important: `Library` has its own methods for working with memory -
-/// they are also needed, but only when we are not the creators of the memory region.
+/// Important: [`Scope`](crate::ffi::scope::Scope) has its own functions for working with memory -
+/// they are also needed, but only when the memory region was not created by us.
 ///
 /// To work with raw addresses allocated by the C side (for example, `strdup`),
-/// use the `Library` methods directly.
+/// use [`Scope::free`](crate::ffi::scope::Scope::free),
+/// [`Scope::readMemory`](crate::ffi::scope::Scope::readMemory) and
+/// [`Scope::writeMemory`](crate::ffi::scope::Scope::writeMemory) directly.
 ///
-/// `'g` is the lifetime of the ScopeGuard block of [`crate::ffi!`] in which it was created.
+/// `'g` is the lifetime of the [`crate::ffi!`] block in which it was created.
 /// Until it is `'static` — the value physically cannot be returned from [`crate::ffi!`] outside.
 pub struct AllocatedMemory<'g>
 {
   /// Raw address of the allocated memory block in the zygote heap.
   address: usize,
+  
   /// Size of the allocated memory block in bytes.
   length: usize,
-  /// Phantom lifetime marker tying the allocation to the [`ffi!`] scope.
+  
+  /// Phantom lifetime marker tying the allocation to the [`crate::ffi!`] scope.
   _scope: PhantomData<&'g ()>
 }
 

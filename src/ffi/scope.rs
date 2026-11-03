@@ -1,3 +1,4 @@
+use self::internal::ScopeGuard;
 use crate::errnoPolicy::globalReadErrno;
 use crate::ffi::allocatedMemory::AllocatedMemory;
 use crate::ffi::errors::FFIError;
@@ -9,17 +10,17 @@ use crate::ffi::types::{Type, Value};
 use crate::pathResolver::{resolveGlobal, PathResolver};
 use crate::zygote::{ClonedZygote, FFIRequest, ZygoteGuard};
 use std::cell::RefCell;
-use std::cell::UnsafeCell;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 // =================================================================================================
 
-/// Heavy stack or arena for temporary allocations within an [`ffi!`] scope.
-struct HeavyStack
+/// Heavy stack or arena for temporary allocations within an [`crate::ffi!`] scope.
+pub(crate) struct HeavyStack
 {
   /// Local path resolver for the current scope.
   pathResolver: Option<PathResolver>,
+  
   /// Scope-level override for errno capture — see [`Scope::setReadErrno`].
   /// `None` means "no scope override, fall through to the global default".
   readErrno: Option<bool>
@@ -27,31 +28,46 @@ struct HeavyStack
 
 // =================================================================================================
 
-/// Owner of HeavyStack. Created by the [`ffi!`] macro once per block (only if
-/// the user requested Scope), lives and dies strictly with this block.
-///
-/// Is not published directly — access only through [`Scope<'g>.`].
-#[doc(hidden)]
-pub struct ScopeGuard
+/// Internal machinery of the scope — not part of the public API.
+pub(crate) mod internal
 {
-  /// Lazily initialized internal state of the scope.
-  inner: UnsafeCell< Option<HeavyStack> >
-}
+  use super::HeavyStack;
+  use std::cell::UnsafeCell;
 
-impl ScopeGuard
-{
+  /// Owner of [`HeavyStack`]. Created by the [`crate::ffi!`] macro once per block (only if
+  /// the user requested Scope), lives and dies strictly with this block.
+  ///
+  /// Is not published directly — access only through [`Scope<'g>`](super::Scope).
   #[doc(hidden)]
-  #[inline(always)]
-  pub const fn new() -> Self
+  pub struct ScopeGuard
   {
-    Self {
-      inner: UnsafeCell::new(None)
+    /// Lazily initialized internal state of the scope.
+    pub(crate) inner: UnsafeCell< Option<HeavyStack> >
+  }
+
+  impl ScopeGuard
+  {
+    #[doc(hidden)]
+    #[inline(always)]
+    pub const fn new() -> Self
+    {
+      Self {
+        inner: UnsafeCell::new(None)
+      }
+    }
+
+    /// Creates a [`Scope`](super::Scope) handle that borrows this guard.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn scope(&self) -> super::Scope<'_>
+    {
+      super::Scope::new(self)
     }
   }
 }
 
 thread_local!{
-  /// Thread-local stack tracking active ScopeGuard pointers for the current thread.
+  /// Thread-local stack tracking active `ScopeGuard` pointers for the current thread.
   static ScopeStack: RefCell<Vec<*const ScopeGuard>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -65,8 +81,8 @@ pub(super) fn currentScopeReadErrno() -> Option<bool>
 {
   ScopeStack.with(|stack| {
     let guardPtr: *const ScopeGuard = *stack.borrow().last()?;
-    // Safety: a pointer is only ever on ScopeStack while its ScopeGuard is
-    // alive — pushed in Scope::new, popped in Scope::drop before the guard
+    // Safety: a pointer is only ever on `ScopeStack` while its `ScopeGuard` is
+    // alive — pushed in `Scope::new`, popped in `Scope::drop` before the guard
     // itself can go out of scope.
     let slot: &Option<HeavyStack> = unsafe{ &*(*guardPtr).inner.get() };
     slot.as_ref()?.readErrno
@@ -75,10 +91,10 @@ pub(super) fn currentScopeReadErrno() -> Option<bool>
 
 // =================================================================================================
 
-/// A handle to the ScopeGuard of the current [`crate::ffi!`]-block — borrows it for 'g.
+/// A handle to the internal `ScopeGuard` of the current [`crate::ffi!`]-block — borrows it for 'g.
 ///
 /// That is precisely why [`AllocatedMemory<'g>`] and [`Library<'g>`] cannot leave
-/// the block: the ScopeGuard, which they borrow, is dropped at the boundary of the
+/// the block: the internal `ScopeGuard`, which they borrow, is dropped at the boundary of the
 /// block, and this is checked by the compiler.
 pub struct Scope<'g>
 {
@@ -89,9 +105,10 @@ impl<'g> Scope<'g>
 {
   // ===============================================================================================
 
-  #[doc(hidden)]
+  /// Internal constructor: `Scope` is obtained via [`FFIScope::scope`]
+  /// or [`crate::ffi!`] macro.
   #[inline(always)]
-  pub fn new(guard: &'g ScopeGuard) -> Self
+  pub(crate) fn new(guard: &'g ScopeGuard) -> Self
   {
     ScopeStack.with(|s| s.borrow_mut().push(guard as *const ScopeGuard));
     Self { guard }
@@ -110,11 +127,16 @@ impl<'g> Scope<'g>
 
   // ===============================================================================================
 
-  /// Overrides errno capture for every call made through this scope — see
-  /// `FFIRequest::Call`'s `readErrno` field for what capture actually means.
-  /// A per-call override (`.errno()`/`.noErrno()` on [`CallBuilder`](crate::ffi::library::CallBuilder))
-  /// still takes priority over this; this in turn takes priority over the
-  /// global default set via [`crate::errnoPolicy::setGlobalReadErrno`].
+  /// Overrides `errno` capture for every call made through this scope.
+  ///
+  /// When enabled, the errno left by the call is read inside the clone right
+  /// after it returns, and becomes available via [`Scope::lastErrno`] (plus
+  /// [`Scope::lastOsError`] on Windows). Calls that did not ask for capture —
+  /// and non-call operations — leave it as `None`.
+  ///
+  /// A per-call override (`.errno()`/`.noErrno()`) still takes priority over
+  /// this; this in turn takes priority over the global default set via
+  /// [`crate::errnoPolicy::setGlobalReadErrno`].
   pub fn setReadErrno(&self, enabled: bool) -> ()
   {
     let slot: &mut Option<HeavyStack> = unsafe{ &mut *self.guard.inner.get() };
@@ -243,7 +265,7 @@ impl<'g> Scope<'g>
     value.try_into()
   }
 
-  /// Writes data from `Value` into the clone's memory at `pointer`.
+  /// Writes data from [`FfiArg`] into the clone's memory at `pointer`.
   pub fn writeMemory(pointer: impl Into<usize>, value: impl FfiArg) -> Result<(), FFIError>
   {
     sendRawRequest(FFIRequest::WriteMemory {
@@ -256,7 +278,7 @@ impl<'g> Scope<'g>
   // ===============================================================================================
 
   /// Reads a dynamically typed C structure from the pointer 
-  /// and returns it as a `DynamicStruct`.
+  /// and returns it as a [`DynamicList`].
   pub fn readDynamicStruct(
     pointer: impl Into<usize>,
     fields: &[Type]
@@ -416,7 +438,7 @@ impl<'g> Drop for Scope<'g>
 /// Created by [`FFIScope::enter`]. Holds:
 /// - a cloned zygote process and its IPC socket — any FFI operation sent
 ///   through this thread's stack lands in this clone,
-/// - a [`ScopeGuard`] that anchors the `'g` lifetime of [`Scope`],
+/// - an internal `ScopeGuard` that anchors the `'g` lifetime of [`Scope`],
 ///   [`AllocatedMemory<'g>`] and [`Library<'g>`].
 ///
 /// On drop: the zygote is killed, the guard is released, and any
@@ -424,9 +446,9 @@ impl<'g> Drop for Scope<'g>
 /// automatically (their own `Drop` runs only while `'g` is still valid — by
 /// construction it has been, because we are now at the end of the borrow).
 ///
-/// todo Requires consideration; this should theoretically not be possible:
-///  If you need to keep an allocation past the scope, extract its raw address
-///  via [`AllocatedMemory::address`] before the scope ends.
+//  todo Requires consideration; this should theoretically not be possible:
+//   If you need to keep an allocation past the scope, extract its raw address
+//   via [`AllocatedMemory::address`] before the scope ends.
 ///
 /// This is the non-macro entry point. It exists for use cases where the
 /// boundaries of the FFI block are not known at compile time — a JIT, an
@@ -436,6 +458,7 @@ pub struct FFIScope
   /// RAII handle that keeps the cloned zygote on the thread-local stack
   /// for as long as we are alive.
   _zygote: ZygoteGuard,
+  
   /// Backing storage for the `'g` lifetime borrowed by [`Scope`],
   /// [`AllocatedMemory<'g>`] and [`Library<'g>`].
   guard: ScopeGuard

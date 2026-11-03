@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 /// Wire format: a relative pointer to the concrete decode function, both
 /// sanity tags, and the captured state's own serialized bytes.
 #[derive(Serialize, Deserialize)]
-#[doc(hidden)]
 pub struct Envelope
 {
   /// Offset of the target decode function relative to the module base.

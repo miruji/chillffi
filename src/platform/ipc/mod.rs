@@ -58,6 +58,8 @@ pub const ZygoteFlag: &str = "__zygote";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FFIRequest
 {
+  // ===============================================================================================
+  
   /// Calls a function from a dynamic library with the given arguments and expected return type.
   ///
   /// `readErrno`: when true, the clone reads `errno` immediately after the C call
@@ -79,35 +81,48 @@ pub enum FFIRequest
     fixedArgs: Option<usize>
   },
 
+  // ===============================================================================================
+
   /// Allocates a block of memory of the specified length in the zygote address space.
   Alloc { length: usize },
+  
   /// Allocates enough memory to hold a dynamically-shaped struct — the byte
   /// size (with correct platform padding/alignment) is computed by `libffi`
   /// on the clone side from `fields`, not guessed by the caller. Response
   /// carries both the pointer and the resolved size (see `executeFFI`).
   AllocDynamicStruct { fields: Vec<Type> },
+  
   /// Allocates a block of memory with specific alignment.
   /// Uses `posix_memalign` under the hood — alignment must be a power of 2.
   AllocAligned { length: usize, alignment: usize },
+  
   /// Frees a previously allocated memory block by its pointer.
   Free { pointer: usize },
 
+  // ===============================================================================================
+
   /// Reads a raw memory block of the given length starting at the specified pointer.
   ReadMemory { pointer: usize, length: usize },
+  
   /// Writes a value to the specified address in the zygote memory.
   WriteMemory { pointer: usize, value: Value },
+
+  // ===============================================================================================
 
   /// Reads a dynamically-typed struct at `pointer`. Field byte offsets
   /// (padding, alignment) are computed by `libffi` for the current ABI,
   /// not assumed — this is what makes [`Type::Struct`] usable for shapes
   /// that don't exist as a Rust type at compile time.
   ReadDynamicStruct { pointer: usize, fields: Vec<Type> },
+  
   /// Writes `values` into a dynamically-typed struct at `pointer`.
   WriteDynamicStruct {
     pointer: usize,
     fields: Vec<Type>,
     values: Vec<Value>
   },
+
+  // ===============================================================================================
 
   /// Parent sends a serialized closure; the clone deserializes and stores it.
   RegisterCallback {
@@ -117,6 +132,7 @@ pub enum FFIRequest
     argTypes: Vec<Type>,
     returnType: Type
   },
+  
   /// Calls a function directly by its raw memory pointer
   /// with the provided arguments and expected return type.
   ///
@@ -127,6 +143,8 @@ pub enum FFIRequest
     resultType: Type,
     readErrno: bool
   }
+
+  // ===============================================================================================
 }
 
 /// Response to the request with the execution result or error.
@@ -165,16 +183,23 @@ pub enum FFIResponse
 /// `pub type Transport = ...;` alias.
 pub trait Transport: 'static
 {
+  // ===============================================================================================
+  
   /// Runtime-side data endpoint: send a request, receive a response.
   type RuntimeSide: RuntimeSide + 'static;
+  
   /// Clone-side data endpoint: receive a request, send a response.
   type CloneSide: CloneSide + 'static;
+  
   /// What a clone hands back through the control channel so the Runtime can
   /// reconnect to it.
   type Bootstrap: Serialize + DeserializeOwned + Send + 'static;
+  
   /// Full handle Runtime holds for the Main Zygote (process + control plane).
   type ZygoteHandle: Send + 'static;
 
+  // ===============================================================================================
+  
   /// Short backend name for diagnostics.
   #[allow(dead_code)]
   fn name() -> &'static str;
@@ -217,6 +242,8 @@ pub trait Transport: 'static
   /// In Runtime, after receiving [`Bootstrap`](Transport::Bootstrap) from
   /// the clone via the control channel: rebuilds the data endpoint.
   fn runtimeConnect(bootstrap: Self::Bootstrap) -> io::Result<Self::RuntimeSide>;
+
+  // ===============================================================================================
 }
 
 /// Runtime-side data endpoint.

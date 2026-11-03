@@ -8,6 +8,7 @@ use std::ffi::CString;
 #[derive(Debug, Clone)]
 pub struct Arg(pub(crate) Value);
 
+#[doc(hidden)]
 pub mod private
 {
   use super::Arg;
@@ -25,7 +26,7 @@ pub mod private
 ///
 /// Prevents external users from constructing or using `Value` directly.
 pub trait FfiArg: private::Sealed + private::IntoFfiValue {}
-
+#[doc(hidden)]
 impl<T: private::Sealed + private::IntoFfiValue> FfiArg for T {}
 
 // =================================================================================================
@@ -34,7 +35,7 @@ impl<T: private::Sealed + private::IntoFfiValue> FfiArg for T {}
 
 impl From<Callback> for Arg
 {
-  /// Wraps the callback ID into `Value::Function`.
+  /// Wraps the callback ID into an [`Arg`].
   fn from(callback: Callback) -> Self
   {
     Self(Value::Function(callback.0))
@@ -45,7 +46,7 @@ impl private::Sealed for Callback {}
 
 impl private::IntoFfiValue for Callback
 {
-  /// Converts the handle into `Value::Function`.
+  /// Converts the handle into an [`Arg`].
   fn intoFfiValue(self) -> Arg
   {
     Arg(Value::Function(self.0))
@@ -63,7 +64,7 @@ macro_rules! implSealedArg
 
     impl private::IntoFfiValue for $type
     {
-      /// Converts the value through `Value::from`.
+      /// Converts the value into an [`Arg`].
       fn intoFfiValue(self) -> Arg
       {
         Arg(Value::from(self))
@@ -72,7 +73,7 @@ macro_rules! implSealedArg
     
     impl From<$type> for Arg
     {
-      /// Wraps the value into an `Arg`.
+      /// Wraps the value into an [`Arg`].
       fn from(v: $type) -> Self
       {
         Self(Value::from(v))
@@ -105,6 +106,30 @@ implSealedArg!(CString);
 implSealedArg!(&CStr);
 implSealedArg!(Vec<u8>);
 implSealedArg!(&[u8]);
+
+// =================================================================================================
+
+// A byte-string literal `b"..."` is `&[u8; N]`, and Rust does not coerce it
+// to `&[u8]` inside a generic call - so it is accepted as is, without
+// a manual `.to_vec()`.
+
+impl<const N: usize> private::Sealed for &[u8; N] {}
+
+impl<const N: usize> private::IntoFfiValue for &[u8; N]
+{
+  fn intoFfiValue(self) -> Arg
+  {
+    Arg(Value::from(self.as_slice()))
+  }
+}
+
+impl<const N: usize> From<&[u8; N]> for Arg
+{
+  fn from(v: &[u8; N]) -> Self
+  {
+    Self(Value::from(v.as_slice()))
+  }
+}
 
 // =================================================================================================
 

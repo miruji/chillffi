@@ -27,6 +27,7 @@ impl TryFrom<Value> for String
   type Error = FFIError;
 
   /// Attempts to convert a string [`Value`] into a Rust [`String`].
+  #[doc(hidden)]
   fn try_from(value: Value) -> Result<Self, Self::Error>
   {
     let bytes: Vec<u8> = extractStringBytes(value)?;
@@ -60,6 +61,7 @@ impl TryFrom<Value> for CString
   type Error = FFIError;
 
   /// Attempts to convert a string [`Value`] into a [`CString`].
+  #[doc(hidden)]
   fn try_from(value: Value) -> Result<Self, Self::Error>
   {
     let bytes: Vec<u8> = extractStringBytes(value)?;
@@ -93,6 +95,7 @@ impl TryFrom<Value> for Vec<u8>
   type Error = FFIError;
 
   /// Extracts raw bytes from a string [`Value`].
+  #[doc(hidden)]
   fn try_from(value: Value) -> Result<Self, Self::Error>
   {
     extractStringBytes(value)

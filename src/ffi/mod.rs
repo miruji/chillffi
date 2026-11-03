@@ -8,5 +8,6 @@ pub mod types;
 pub mod errors;
 pub mod allocatedMemory;
 pub mod scope;
+#[doc(hidden)]
 pub mod callback;
 // =================================================================================================

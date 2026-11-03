@@ -43,8 +43,8 @@ impl DynamicList
 
   /// Extracts a nested struct field by index as a [`StructValue`].
   ///
-  /// The field must itself be a `Value::Struct`; a scalar or any other
-  /// variant returns an error rather than panicking.
+  /// The field must itself be a nested struct ([`StructValue`]); a scalar or
+  /// any other kind of value returns an error rather than panicking.
   pub fn getStruct(&self, index: usize) -> Result<StructValue, FFIError>
   {
     match self.values.get(index)
@@ -132,8 +132,8 @@ impl StructValue
 
   /// Extracts a nested struct field by index as a [`StructValue`].
   ///
-  /// The field must itself be a `Value::Struct`; a scalar or any other
-  /// variant returns an error rather than panicking.
+  /// The field must itself be a nested struct ([`StructValue`]); a scalar or
+  /// any other kind of value returns an error rather than panicking.
   pub fn getStruct(&self, index: usize) -> Result<Self, FFIError>
   {
     match self.values.get(index)

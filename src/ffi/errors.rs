@@ -6,34 +6,54 @@ use serde::Serialize;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FFIError
 {
-  /// The global zygote in ZygoteState was not initialized.
+  // ===============================================================================================
+  
+  /// The global zygote was not initialized.
   ZygoteNotInitialized,
+  
   /// The call is executed outside the context of the [`crate::ffi!`] macro.
   NoActiveZygoteScope,
+  
   /// IPC communication failure with the zygote process.
   ZygoteCommunicationFailed(String),
 
+  // ===============================================================================================
+
   /// Failed to dynamically load the library.
   LibraryLoadFailed { libraryPath: String, message: String },
+  
   /// The requested library was not found in the registry by its ID.
   LibraryNotFound { libraryPath: String },
 
-  /// The requested function/symbol was not found in the loaded library.
+  // ===============================================================================================
+
+  /// The requested `function`/`symbol` was not found in the loaded library.
   SymbolNotFound { functionName: String },
-  /// An invalid argument was passed (for example, Value::None).
+
+  /// An invalid argument was passed (for example, a variadic call without fixed
+  /// arguments, or a null pointer).
   BadArgument(String),
+
+  // ===============================================================================================
   
   /// Data serialization error during IPC.
   EncodeFailed(String),
+  
   /// Data deserialization error during IPC.
   DecodeFailed(String),
 
-  /// Internal error of the FFI mechanism: storage/argsFfi out of sync
+  // ===============================================================================================
+
+  /// Internal error of the FFI mechanism: `storage`/`argsFfi` out of sync
   /// (runtime bug, not an input data issue).
   ArgumentDowncastFailed(String),
 
+  // ===============================================================================================
+
   /// Other unclassified errors.
   Other(String)
+
+  // ===============================================================================================
 }
 
 impl std::fmt::Display for FFIError

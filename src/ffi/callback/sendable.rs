@@ -47,7 +47,6 @@ impl Sendable
   /// It also means captures are limited to plain, heap-free data (numbers, 
   /// bools, pointers, `#[derive(Clone, Copy)]` structs, ...) — a `String` 
   /// or `Vec` capture will fail to compile here, not corrupt memory at runtime.
-  #[doc(hidden)]
   pub fn fromClosure<F>(
     closure: F,
     relativeOffset: usize,

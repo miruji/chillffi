@@ -44,7 +44,7 @@ fn rawString() -> ()
 {
   let result: i32 = ffi!(|scope| {
     let libc: Library = scope.load(LibcPath)?;
-    libc.call("atoi").arg(b"12345\0".to_vec()).result()
+    libc.call("atoi").arg(b"12345\0").result()
   }).expect("RawString call failed");
 
   assert_eq!(result, 12345);

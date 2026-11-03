@@ -39,6 +39,7 @@ pub(crate) trait PrimitiveValue: Primitive
 /// Mirrors `arg::private`: hides `Value`/`PrimitiveValue` behind the
 /// already-public [`Arg`] wrapper, so the methods below never name a
 /// `pub(crate)` type in their own signature.
+#[doc(hidden)]
 pub mod private
 {
   use super::{Arg, PrimitiveValue};
@@ -76,6 +77,7 @@ pub mod private
 /// which keeps `Value` and `PrimitiveValue` out of the public API while
 /// still letting `T: FfiPrimitive` appear in `pub fn` signatures.
 pub trait FfiPrimitive: Primitive + private::Sealed + private::FromFfiValue {}
+#[doc(hidden)]
 impl<T: PrimitiveValue> FfiPrimitive for T {}
 
 // =================================================================================================

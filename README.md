@@ -16,31 +16,37 @@ keeping your main Rust application running.
 
 ## ✨ Features
 
-| Feature                  | Status                                                                              |
-|--------------------------|-------------------------------------------------------------------------------------|
-| Crash isolation          | ✅ A separate process for FFI that does not break your Runtime.                      |
-| Native FFI execution     | ✅ Not a VM, not large in size, and does not require large dependencies.             |
-| Startup speed            | ✅ The Zygote model does not retain garbage and uses a fast `fork` for each FFI.     |
-| IPC                      | ✅ `ipc-channel` provides serialization and is implemented for different platforms.  |
-| Multithreading and async | ✅ Does not break with multithreading and async                                      |
-| Scope                    | ✅ Scope for FFI execution areas (`ffi!`); so that they are short and do not escape. |
-| Retained Scope           | ✅ Temporary retention of the FFI scope for dynamic systems.                         |
-| Dynamic loading          | ✅ `libffi` is simple, stable, cross-platform, and small in size.                    |
-| Path resolver            | ✅ Global, scope-level, and direct path resolver for libraries.                      |
-| Static FFI               | ✅ Through Rust code.                                                                |
-| Dynamic FFI              | ✅ On-the-fly function calls without the need to compile static C bindings.          |
-| Static structures        | ✅ `repr` structures.                                                                |
-| Dynamic structures       | ✅ Reading and writing structures with arbitrary layouts.                            |
-| Pointer-based structures | ✅ Support for passing structures through pointers.                                  |
-| By-value structures      | ✅ Support for passing structures by value.                                          |
-| Allocation handling      | ✅ Allocation of a memory region for FFI.                                            |
-| Callbacks                | ✅ Passing closures as C functions (`callback!`).                                    |
-| Signals                  | ✅ Working with signals and calling pointers (`callvPointer`, `callPointer`).        |
-| Errno Policy             | ✅ Configuring errno reading at the call, scope, or global level.                    |
-| String data types        | ✅ String (`""`), CString (`c""`), RawString (`b""`).                                |
-| Variadic arguments       | ✅ Support for variable arguments in function calls.                                 |
-| Sandbox (FS protection)  | ⏳ [#45](https://github.com/rts-lang/chillffi/issues/45)                             |
-| Libraries from bytes     | ⏳ [#42](https://github.com/rts-lang/chillffi/issues/42)                             |
+| Feature                                                    | Status                                                                              |
+|------------------------------------------------------------|-------------------------------------------------------------------------------------|
+| Native FFI execution                                       | ✅ Not a VM, not large in size, and does not require large dependencies.             |
+| IPC                                                        | ✅ `ipc-channel` provides serialization and is implemented for different platforms.  |
+| Startup speed                                              | ✅ The Zygote model does not retain garbage and uses a fast `fork` for each FFI.     |
+| Multithreading and async                                   | ✅ Does not break with multithreading and async.                                     |
+| [Crash isolation](examples/isolation/main.rs)              | ✅ A separate process for FFI that does not break your Runtime.                      |
+| [Scope](examples/simple/main.rs)                           | ✅ Scope for FFI execution areas (`ffi!`); so that they are short and do not escape. |
+| [Retained Scope](examples/retainedScope/main.rs)           | ✅ Temporary retention of the FFI scope for dynamic systems.                         |
+| [Dynamic loading](examples/library/main.rs)                | ✅ `libffi` is simple, stable, cross-platform, and small in size.                    |
+| [Path resolver](examples/paths/main.rs)                    | ✅ Global, scope-level, and direct path resolver for libraries.                      |
+| [Static FFI](examples/simple/main.rs)                      | ✅ Through Rust code.                                                                |
+| [Dynamic FFI](examples/library/main.rs)                    | ✅ On-the-fly function calls without the need to compile static C bindings.          |
+| [Static structures](examples/reprStruct/main.rs)           | ✅ `repr` structures.                                                                |
+| [Dynamic structures](examples/dynamicStruct/main.rs)       | ✅ Reading and writing structures with arbitrary layouts.                            |
+| [Pointer-based structures](examples/dynamicStruct/main.rs) | ✅ Support for passing structures through pointers.                                  |
+| [By-value structures](examples/byValueStruct/main.rs)      | ✅ Support for passing structures by value.                                          |
+| [Allocation handling](examples/memory/main.rs)             | ✅ Allocation of a memory region for FFI.                                            |
+| [Callbacks](examples/callback/main.rs)                     | ✅ Passing closures as C functions (`callback!`).                                    |
+| [Signals](examples/callPointer/main.rs)                    | ✅ Working with signals and calling pointers (`callvPointer`, `callPointer`).        |
+| [Errno Policy](examples/errno/main.rs)                     | ✅ Configuring `errno` reading at the call, scope, or global level.                  |
+| [String data types](examples/strings/main.rs)              | ✅ String (`""`), CString (`c""`), RawString (`b""`).                                |
+| [Variadic arguments](examples/variadic/main.rs)            | ✅ Support for variable arguments in function calls.                                 |
+| Sandbox (FS protection)                                    | ⏳ [#45](https://github.com/rts-lang/chillffi/issues/45)                             |
+| Libraries from bytes                                       | ⏳ [#42](https://github.com/rts-lang/chillffi/issues/42)                             |
+
+Examples are taken from the [examples](examples) folder.
+
+The tests there are divided by features, and inside there are different usage variations.
+
+You can also run them via `cargo run --example <name>`.
 
 ---
 
@@ -98,7 +104,7 @@ from the system library `libc.so.6` using `AllocatedMemory`:
 fn main() -> ()
 {
   // clock_gettime(CLOCK_REALTIME, &timespec) — struct out-param via Alloc/ReadMemory,
-  // the case a plain Value::Pointer can't cover on its own.
+  // the case a plain Pointer can't cover on its own.
   let (secs, nanos): (i64, i64) = ffi!(|scope| {
     let libc: Library = scope.load("libc.so.6")?;
 
@@ -110,9 +116,7 @@ fn main() -> ()
       .arg(mem.asPointer())
       .void()?;
 
-    let Value::RawString(bytes) = mem.read()? else { 
-      panic!("expected bytes")
-    };
+    let bytes: Vec<u8> = mem.read()?;
     drop(mem);
 
     let secs: i64 = i64::from_ne_bytes(bytes[0..8].try_into().unwrap());
@@ -123,12 +127,6 @@ fn main() -> ()
   println!("clock_gettime(CLOCK_REALTIME) = {}.{:09}", secs, nanos);
 }
 ```
-
-For more detailed examples, see the [examples](examples) folder.
-
-The tests there are divided by features, and inside there are different usage variations.
-
-You can also run them via `cargo run --example <name>`.
 
 ## ⚡ Why is this convenient
 
