@@ -29,7 +29,8 @@ include = [
   "src/**/*",
   "Cargo.toml",
   "README.md",
-  "LICENSE.md"
+  "LICENSE.md",
+  "CONTRIBUTING.md"
 ]
 
 documentation = "https://docs.rs/chillffi"
@@ -54,6 +55,7 @@ targets = [
 # ======================================================================================================================
 
 [profile.release]
+
 opt-level = 3
 codegen-units = 1
 lto = "fat"
@@ -65,6 +67,7 @@ incremental = false
 rpath = false
 
 [profile.dev]
+
 opt-level = 0
 debug = true
 overflow-checks = true
@@ -74,12 +77,14 @@ incremental = true
 # ======================================================================================================================
 
 [target.'cfg(windows)'.build-dependencies]
+
 cc = "1.2"
 # Locates cl.exe/link.exe on Windows for build.rs; unused elsewhere.
 
 # ======================================================================================================================
 
 [dependencies]
+
 bincode = { version = "2.0.1", features = ["serde"] }
 # Provides binary serialization format for serde, used for efficient encoding
 # and decoding of IPC messages between isolated processes.
@@ -128,12 +133,20 @@ ipc-channel = { git = "https://github.com/miruji/ipc-channel.git", branch = "add
 # ======================================================================================================================
 
 [features]
+
+docsrs = ["libffi/check_only"]
 # Enabled only on docs.rs. Propagates to libffi-sys so it skips compiling
 # the native libffi C sources (required because docs.rs cross-compiles
 # without the proper C toolchains).
-docsrs = ["libffi/check_only"]
+
+# ======================================================================================================================
 
 [lints.rust]
+
+missing_docs = "allow"
+# We do not enforce `docs` because it would require descriptions at 
+# the top of every file and other unnecessary documentation.
+
 non_snake_case = "allow"
 non_upper_case_globals = "allow"
 non_camel_case_types = "allow"
@@ -154,6 +167,7 @@ non_camel_case_types = "allow"
 # cargo clippy --all-targets -- -D warnings
 
 [lints.clippy]
+
 unused_unit = "allow"
 option_if_let_else = "allow"
 collapsible_if = "allow"

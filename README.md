@@ -5,6 +5,8 @@
 [![Crates.io](https://img.shields.io/crates/v/chillffi.svg)](https://crates.io/crates/chillffi)
 [![Documentation](https://docs.rs/chillffi/badge.svg)](https://docs.rs/chillffi)
 [![License: FCL](https://img.shields.io/badge/License-FCL-blue.svg)](LICENSE.md)
+[![Contributing](https://img.shields.io/badge/Contributing-Guidelines-blueviolet.svg)](CONTRIBUTING.md)
+[![Security](https://img.shields.io/badge/Security-Policy-slategray.svg)](SECURITY.md)
 
 `chillffi` allows dynamically loading **C ABI-compatible libraries** 
 and calling their functions at runtime, **isolating each FFI call in a separate process**.
@@ -14,7 +16,7 @@ keeping your main Rust application running.
 
 ---
 
-## ✨ Features
+### ✨ Features
 
 | Feature                                                    | Status                                                                              |
 |------------------------------------------------------------|-------------------------------------------------------------------------------------|
@@ -50,7 +52,7 @@ You can also run them via `cargo run --example <name>`.
 
 ---
 
-## 📦 Installation
+### 📦 Installation
 
 Add the dependency to `Cargo.toml`. There are no separate configuration flags.
 
@@ -73,7 +75,9 @@ Add the dependency to `Cargo.toml`. There are no separate configuration flags.
 > All because verification is done through GitHub CI, and there are no other platforms there.
 > If you need other platforms — that is separate work and research.
 
-## 🚀 Quick Start
+---
+
+### 🚀 Quick Start
 
 Example of a safe call to the `sqrt` function from the system library `libm.so.6` 
 using the `ffi!{}` macro and explicit typing:
@@ -128,7 +132,9 @@ fn main() -> ()
 }
 ```
 
-## ⚡ Why is this convenient
+---
+
+### ⚡ Why is this convenient
 
 In general practice, we are used to doing it like in Python
 and other programming languages - precisely specifying all the wrappers for FFI.
@@ -158,7 +164,9 @@ As a result, we can freely and simply write:
 
 This is also different from the WASM approach - because we preserve a true native execution here.
 
-## 🛠️ How it works
+---
+
+### 🛠️ How it works
 
 1. Before your code starts running, a Zygote is created - it is an empty process for cloning itself and isolating FFI.
 2. When work with FFI is required - a copy is created from the zygote.
@@ -186,7 +194,9 @@ This is also different from the WASM approach - because we preserve a true nativ
 >
 > Even if you are an experienced programmer, there are things that do not depend on your experience.
 
-## 📄 License
+---
+
+### 📄 License
 
 The source code is distributed under the [FCL](LICENSE.md) license.
 This is a custom license of the [RTS](https://github.com/rts-lang/rts) programming language.
@@ -203,4 +213,8 @@ But if very simply, for those who just work and want to use it:
 
 Keep this in mind for your projects.
 
-<!-- ## 🧠 Contributing -->
+---
+
+### 🧠 Contributing
+
+If you want to contribute to the development of the project, read [this](CONTRIBUTING.md).

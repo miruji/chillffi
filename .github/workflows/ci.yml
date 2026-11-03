@@ -1,7 +1,7 @@
 name: CI
 
-# We do not check warns here - this is a matter of manual review and fixes.
-# Therefore this CI is only needed for build and compatibility checks.
+# This CI is only needed for build and compatibility checks.
+#
 # In addition, it allows conveniently checking everything locally and making PRs
 # into a linear history - which is strictly locked without other branches.
 
