@@ -10,12 +10,11 @@
 //!
 //! All IPC details are hidden behind the [`ipc::Transport`] trait.
 // =================================================================================================
-pub use crate::platform::ipc::{FFIRequest, FFIResponse, ZygoteFlag};
+pub use crate::platform::ipc::{FFIRequest, FFIResponse};
 use crate::platform::ipc::{RuntimeSide as RuntimeSideTrait, Transport as TransportTrait};
 use crate::platform::low;
 use parking_lot::{Mutex, MutexGuard};
 use std::cell::RefCell;
-use std::env;
 use std::io;
 use std::sync::OnceLock;
 use std::thread;
@@ -208,20 +207,6 @@ impl Drop for ZygoteGuard
 }
 
 // =================================================================================================
-
-/// Entry point of the child Zygote process;
-///
-/// `main()` must call this as the first line if the first argument == [`ZygoteFlag`].
-///
-/// The second argument is the `IpcOneShotServer` name of the Runtime; it is
-/// passed to the platform backend as `flag`.
-pub fn runAsZygote() -> !
-{
-  // argv[2] is the bootstrap name of the control plane.
-  let flag: Option<String> = env::args().nth(2);
-
-  <ipc::Transport as TransportTrait>::zygoteControlLoop(flag)
-}
 
 /// Entry of the Main Zygote when the bootstrap name is passed explicitly (cdylib hosts).
 pub fn runAsZygoteNamed(serverName: String) -> !
