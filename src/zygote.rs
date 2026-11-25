@@ -77,6 +77,26 @@ impl ZygoteHandle
   }
 }
 
+/// Custom command used to launch the Main Zygote (host is not the `chillffi` executable).
+/// The bootstrap server name is appended as the last argument.
+pub static ZygoteLaunch: OnceLock<(std::ffi::OsString, Vec<std::ffi::OsString>)> = OnceLock::new();
+
+/// Sets the zygote launch command; returns false if it was already set.
+pub fn setZygoteCommand(program: std::ffi::OsString, args: Vec<std::ffi::OsString>) -> bool
+{
+  ZygoteLaunch.set((program, args)).is_ok()
+}
+
+static InitLock: Mutex<()> = Mutex::new(());
+
+/// Lazy start: first FFI call brings the Main Zygote up if nobody did.
+fn ensureZygote() -> io::Result<()>
+{
+  let _guard = InitLock.lock();
+  if ZygoteState.get().is_some() { return Ok(()); }
+  initZygote()
+}
+
 /// Global state of the active zygote with synchronized access.
 pub static ZygoteState: OnceLock<Mutex<ZygoteHandle>> = OnceLock::new();
 
@@ -97,6 +117,7 @@ impl ClonedZygote
   /// Requests a clone from the main zygote and returns its RAII handle.
   pub fn getMeClone() -> io::Result<Self>
   {
+    ensureZygote()?;
     let mutex: &Mutex<ZygoteHandle> = ZygoteState.get().ok_or_else(|| {
       io::Error::new(io::ErrorKind::NotFound, "Zygote not initialized")
     })?;
@@ -200,6 +221,12 @@ pub fn runAsZygote() -> !
   let flag: Option<String> = env::args().nth(2);
 
   <ipc::Transport as TransportTrait>::zygoteControlLoop(flag)
+}
+
+/// Entry of the Main Zygote when the bootstrap name is passed explicitly (cdylib hosts).
+pub fn runAsZygoteNamed(serverName: String) -> !
+{
+  <ipc::Transport as TransportTrait>::zygoteControlLoop(Some(serverName))
 }
 
 /// Zygote initialization; call once,

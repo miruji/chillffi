@@ -137,6 +137,10 @@ ipc-channel = {
 
 [features]
 
+default = ["autoInit"]
+autoInit = []
+# Eager zygote start via #[ctor]; disable in cdylib hosts (python, node, ...).
+
 docsrs = ["libffi/check_only"]
 # Enabled only on docs.rs. Propagates to libffi-sys so it skips compiling
 # the native libffi C sources (required because docs.rs cross-compiles

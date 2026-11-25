@@ -176,6 +176,7 @@ mod examplesPlatform
 
 mod worker;
 mod zygote;
+pub use zygote::{setZygoteCommand, runAsZygoteNamed};
 mod platform;
 pub mod ffi;
 pub mod pathResolver;
@@ -195,6 +196,7 @@ use crate::zygote::{runAsClone};
 /// Single entry point for zygote initialization in any binary (including tests).
 /// Checks whether the process is running as a zygote; if so — switches to daemon mode,
 /// otherwise — initializes the parent side.
+#[cfg(feature = "autoInit")]
 #[ctor::ctor(unsafe)]
 fn zygoteEntrypoint() -> ()
 {
