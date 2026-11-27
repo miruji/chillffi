@@ -45,7 +45,7 @@ use crate::ffi::errors::FFIError;
 use crate::platform::low;
 use crate::worker::executeFFI;
 use crate::worker::{takeLastErrno, takeLastOsError};
-use crate::zygote::ZygoteFlag;
+use super::ZygoteFlag;
 use fxhash::FxHashMap;
 use ipc_channel::ipc::{self, IpcOneShotServer, IpcReceiver, IpcSender};
 use libloading::Library;

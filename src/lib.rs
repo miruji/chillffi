@@ -184,10 +184,14 @@ pub mod errnoPolicy;
 
 // =================================================================================================
 
+use std::env;
+use crate::platform::ipc::ZygoteFlag;
+use crate::zygote::initZygote;
+
 #[cfg(windows)]
 use crate::platform::ipc::windows::CloneFlag;
 #[cfg(windows)]
-use crate::zygote::{runAsClone};
+use crate::zygote::runAsClone;
 
 // =================================================================================================
 
@@ -204,7 +208,13 @@ fn zygoteEntrypoint() -> ()
   {
     if arg == ZygoteFlag
     {
-      runAsZygote();
+      if let Some(serverName) = args.next()
+      {
+        let name = serverName
+          .into_string()
+          .unwrap_or_else(|s| s.to_string_lossy().into_owned());
+        runAsZygoteNamed(name);
+      }
     }
 
     #[cfg(windows)]
