@@ -163,11 +163,20 @@ impl TransportTrait for Transport
     ) = IpcOneShotServer::new().map_err(io::Error::other)?;
 
     //
-    let currentExe: PathBuf = env::current_exe()?;
-    // todo Might fail if the path to the executable file
-    //  is too long or there are no permissions?
-    let process: Child = Command::new(currentExe)
-      .arg(ZygoteFlag)
+    let mut command: Command = match crate::zygote::ZygoteLaunch.get()
+    {
+      Some((program, args)) => { let mut c = Command::new(program); c.args(args); c }
+      None =>
+      {
+        let currentExe: PathBuf = env::current_exe()?;
+        // todo Might fail if the path to the executable file
+        //  is too long or there are no permissions?
+        let mut c = Command::new(currentExe);
+        c.arg(ZygoteFlag);
+        c
+      }
+    };
+    let process: Child = command
       .arg(&serverName)
       .stdin(Stdio::null())
       .stdout(Stdio::inherit())

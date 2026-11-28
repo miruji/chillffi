@@ -215,9 +215,18 @@ impl TransportTrait for Transport
       String
     ) = IpcOneShotServer::new().map_err(io::Error::other)?;
 
-    let currentExe: PathBuf = env::current_exe()?;
-    let process: Child = Command::new(currentExe)
-      .arg(ZygoteFlag)
+    let mut command: Command = match crate::zygote::ZygoteLaunch.get()
+    {
+      Some((program, args)) => { let mut c = Command::new(program); c.args(args); c }
+      None =>
+      {
+        let currentExe: PathBuf = env::current_exe()?;
+        let mut c = Command::new(currentExe);
+        c.arg(ZygoteFlag);
+        c
+      }
+    };
+    let process: Child = command
       .arg(&serverName)
       .stdin(Stdio::null())
       .stdout(Stdio::inherit())
